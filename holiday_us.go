@@ -1,10 +1,14 @@
 package tart
 
 func HolidaysUS(t *Tart) {
-	t.AddRelative(
+	t.SetBatch(
 		holidaysUSBase(t),
 		holidaysUSX(t),
 	)
+}
+
+func HolidaysUSBase(t *Tart) {
+	t.SetBatch(holidaysUSBase(t))
 }
 
 func holidaysUSBase(t *Tart) map[string]RelativeFunc {
@@ -17,7 +21,7 @@ func holidaysUSBase(t *Tart) map[string]RelativeFunc {
 }
 
 func HolidaysUSX(t *Tart) {
-	t.AddRelative(holidaysUSX(t))
+	t.SetBatch(holidaysUSX(t))
 }
 
 func holidaysUSX(t *Tart) map[string]RelativeFunc {

@@ -1,27 +1,31 @@
-//https://github.com/karrick/tparse
-//https://github.com/araddon/dateparse
-//https://github.com/wlbr/feiertage
+// deeply indebted to:
+// https://github.com/karrick/tparse
+// https://github.com/araddon/dateparse
+// https://github.com/wlbr/feiertage
 
 // TODO
 //	- ordinal management (4th, 22nd, 31st, etc)
+//  - expressions to flatten api & expand functionality
+//  - distance (between 2 dates)
+//  - actual implementation and testing or holidays current skeleton
 package tart
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // A struct encapsulating functionality related to a specific, embedded time.Time
 // instance. A fuzzy acronym for "time and relative time in time".
 type Tart struct {
 	time.Time
-	u Units
-	r Relative
-	c map[string]TimeFunc
-	p Replace
-	*association
+	*Supplement
+	*Relation
 	last string
 }
 
@@ -40,75 +44,146 @@ type Config func(*Tart)
 
 var defaultConfig = []Config{
 	func(t *Tart) { t.Time = time.Now() },
-	func(t *Tart) { t.u = defaultUnits() },
-	func(t *Tart) { t.r = defaultRelative(t) },
-	func(t *Tart) { t.c = make(map[string]TimeFunc) },
-	func(t *Tart) { t.p = defaultReplace() },
-	func(t *Tart) { t.association = defaultAssociation(t) },
+	func(t *Tart) { t.Supplement = defaultSupplement() },
+	func(t *Tart) { t.Relation = newRelation(t) },
 }
 
-func SetTimeFmt(tfmt string) Config {
+var timeFmt = time.RFC3339
+
+func SetTimeFmt(n string) Config {
 	return func(t *Tart) {
-		timeFmt = tfmt
+		timeFmt = n
 	}
 }
 
-//
+// Set the time of the instance to the provided time. This forces a reset to
+// align the instance to the new time setting all relative funcs to defaults,
+// removing cached time funcs, and erasing any set associations.
 func (t *Tart) SetTime(tt time.Time) {
 	t.Time = tt
 	t.reset()
 }
 
 func (t *Tart) reset() {
-	t.c = make(map[string]TimeFunc)
-	t.association.reset(t)
+	t.Relation.reset(t)
 }
 
 // Return the time of the provided string, relative to the Tart instance time.
 func (t *Tart) TimeOf(at string) time.Time {
-	fn := t.TimeFn(at)
+	fn := t.popTimeFn(at)
 	return fn()
 }
 
 //
-type TimeFunc func() time.Time
-
-// Return the TimeFunc of the provided string, relative to the Tart instance time.
-func (t *Tart) TimeFn(at string) TimeFunc {
-	if tfn, ok := t.c[at]; ok {
-		switch {
-		case strings.Contains(at, "!"):
-			if spl := strings.Split(at, "!"); len(spl) == 2 {
-				t.last = spl[1]
-			}
-		default:
-			t.last = at
-		}
-		return tfn
+func (t *Tart) Associate(k, v string) (time.Time, error) {
+	if err := association(k, v, t.rr, t); err != nil {
+		return time.Time{}, err
 	}
+	return t.TimeOf(k), nil
+}
 
-	var rfn RelativeFunc
-	switch {
-	case strings.Contains(at, "!"):
-		if spl := strings.Split(at, "!"); len(spl) == 2 {
-			if fn, ok := t.r[spl[0]]; ok {
-				t.last = spl[1]
-				rfn = fn
+func association(key, value string, r map[string]RelativeFunc, b *Tart) error {
+	if epoch, err := strconv.ParseFloat(value, 64); err == nil && epoch >= 0 {
+		trunc := math.Trunc(epoch)
+		nanos := fractionToNanos(epoch - trunc)
+		r[key] = wrapRelativeFunc(time.Unix(int64(trunc), int64(nanos)))
+		return nil
+	}
+	var base RelativeFunc
+	var y, m, d int
+	var duration time.Duration
+	var direction = 1
+	var err error
+
+	for k, v := range r {
+		if strings.HasPrefix(value, k) {
+			base = v
+			if len(value) > len(k) {
+				// maybe has +, -
+				switch dir := value[len(k)]; dir {
+				case '+':
+					// no-op
+				case '-':
+					direction = -1
+				default:
+					return fmt.Errorf("expected '+' or '-': %q", dir)
+				}
+				var nv string
+				y, m, d, nv = ymd(value[len(k)+1:])
+				if len(nv) > 0 {
+					duration, err = time.ParseDuration(nv)
+					if err != nil {
+						return err
+					}
+				}
 			}
+			if direction < 0 {
+				y = -y
+				m = -m
+				d = -d
+			}
+			tfn := base(b)
+			bt := tfn()
+			nt := bt.Add(time.Duration(int(duration)*direction)).AddDate(y, m, d)
+			r[key] = wrapRelativeFunc(nt)
+			return nil
 		}
-	default:
-		t.last = at
-		if fn, ok := t.r[at]; ok {
-			rfn = fn
+	}
+	nt, fErr := time.Parse(timeFmt, value)
+	if fErr == nil {
+		r[key] = wrapRelativeFunc(nt)
+	}
+	return fErr
+}
+
+func fractionToNanos(fraction float64) int64 {
+	return int64(fraction * float64(time.Second/time.Nanosecond))
+}
+
+func ymd(value string) (int, int, int, string) {
+	// alternating numbers and strings
+	var y, m, d int
+	var accum int     // accumulates digits
+	var unit []byte   // accumulates units
+	var unproc []byte // accumulate unprocessed durations to return
+
+	unitComplete := func() {
+		// NOTE: compare byte slices because some units, i.e. ms, are multi-rune
+		if bytes.Equal(unit, []byte{'d'}) || bytes.Equal(unit, []byte{'d', 'a', 'y'}) || bytes.Equal(unit, []byte{'d', 'a', 'y', 's'}) {
+			d += accum
+		} else if bytes.Equal(unit, []byte{'w'}) || bytes.Equal(unit, []byte{'w', 'e', 'e', 'k'}) || bytes.Equal(unit, []byte{'w', 'e', 'e', 'k', 's'}) {
+			d += 7 * accum
+		} else if bytes.Equal(unit, []byte{'m', 'o'}) || bytes.Equal(unit, []byte{'m', 'o', 'n'}) || bytes.Equal(unit, []byte{'m', 'o', 'n', 't', 'h'}) || bytes.Equal(unit, []byte{'m', 'o', 'n', 't', 'h', 's'}) || bytes.Equal(unit, []byte{'m', 't', 'h'}) || bytes.Equal(unit, []byte{'m', 'n'}) {
+			m += accum
+		} else if bytes.Equal(unit, []byte{'y'}) || bytes.Equal(unit, []byte{'y', 'e', 'a', 'r'}) || bytes.Equal(unit, []byte{'y', 'e', 'a', 'r', 's'}) {
+			y += accum
 		} else {
-			rfn = t.r["default"]
+			unproc = append(append(unproc, strconv.Itoa(accum)...), unit...)
 		}
 	}
 
-	tfn := rfn(t)
-	t.c[at] = tfn
-
-	return tfn
+	expectDigit := true
+	for _, rune := range value {
+		if unicode.IsDigit(rune) {
+			if expectDigit {
+				accum = accum*10 + int(rune-'0')
+			} else {
+				unitComplete()
+				unit = unit[:0]
+				accum = int(rune - '0')
+			}
+			continue
+		}
+		unit = append(unit, string(rune)...)
+		expectDigit = false
+	}
+	if len(unit) > 0 {
+		unitComplete()
+		accum = 0
+		unit = unit[:0]
+	}
+	// log.Printf("y: %d; m: %d; d: %d; nv: %q", y, m, d, unproc)
+	return y, m, d, string(unproc)
 }
 
 // Given a request string duration, gives a duration and error.
@@ -135,7 +210,7 @@ func (t *Tart) TimeFn(at string) TimeFunc {
 // * Year: y, yr, year, years
 func (t *Tart) DurationOf(dur string) time.Duration {
 	t.last = dur
-	if dur, err := isDuration(dur, t.Time, t.u, t.p); err == nil {
+	if dur, err := isDuration(dur, t.Time, t.Units, t.Replace); err == nil {
 		return dur
 	}
 	return zeroD
@@ -143,13 +218,13 @@ func (t *Tart) DurationOf(dur string) time.Duration {
 
 var zeroD = time.Duration(0)
 
-func isDuration(s string, when time.Time, u Units, r Replace) (time.Duration, error) {
+func isDuration(s string, when time.Time, u *Units, r *Replace) (time.Duration, error) {
 	if len(s) == 0 {
 		return zeroD, nil
 	}
 
 	// catch some common but not easily parsed durations
-	s = r.Replace(s)
+	s = r.ReplaceWith(s)
 
 	var isNegative bool
 	var exp, whole, fraction int64
@@ -213,7 +288,7 @@ func isDuration(s string, when time.Time, u Units, r Replace) (time.Duration, er
 
 		//fmt.Printf("number: %f; unit: %q\n", number, unit)
 
-		if duration, ok := u[unit]; ok {
+		if duration, ok := u.GetUnit(unit); ok {
 			totalDuration += number * duration
 		} else {
 			switch unit {

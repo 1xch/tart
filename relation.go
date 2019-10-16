@@ -8,60 +8,72 @@ import (
 	"github.com/araddon/dateparse"
 )
 
-// Add the provided Relative key values to the instance maintained map of relations.
-func (t *Tart) AddRelative(r ...Relative) {
-	for _, rr := range r {
-		for k, v := range rr {
-			t.r[k] = v
-		}
-	}
+//
+type Relation struct {
+	t  *Tart
+	rr map[string]RelativeFunc
+	cc map[string]TimeFunc
 }
 
-//
-type RelativeFunc func(*Tart) TimeFunc
+type (
+	RelativeFunc func(*Tart) TimeFunc //
+	TimeFunc     func() time.Time     //
+)
 
-//
-type Relative map[string]RelativeFunc
+func newRelation(t *Tart) *Relation {
+	r := &Relation{}
+	r.reset(t)
+	return r
+}
 
-func defaultRelative(t *Tart) map[string]RelativeFunc {
+func (r *Relation) reset(t *Tart) {
+	r.t = t
+	r.rr = defaultRelativeFuncs(r.t)
+	r.cc = make(map[string]TimeFunc)
+}
+
+var reservedKeys []string
+
+func defaultRelativeFuncs(t *Tart) map[string]RelativeFunc {
 	r := map[string]RelativeFunc{
-		"any":            Any,
-		"associate":      Associate,
-		"associateWhere": AssociateWhere,
-		"default":        Any,
-		"eocm":           EOM,
-		"eocw":           EOW,
-		"eod":            EOD,
-		"eom":            EOM,
-		"eoq":            EOQ,
-		"eow":            EOW,
-		"eoww":           EOWW,
-		"eoy":            EOY,
-		"last":           Last,
-		"later":          Whenever,
-		"next":           Next,
-		"now":            Now,
-		"shift":          Shift,
-		"shiftFrom":      ShiftFrom,
-		"socm":           SOCM,
-		"socw":           SOCW,
-		"sod":            Tomorrow,
-		"som":            SOM,
-		"someday":        Whenever,
-		"soq":            SOQ,
-		"sow":            SOW,
-		"soww":           SOWW,
-		"soy":            SOY,
-		"today":          Today,
-		"tomorrow":       Tomorrow,
-		"whenever":       Whenever,
-		"yesterday":      Yesterday,
+		"any":       Any,
+		"default":   Any,
+		"eocm":      EOM,
+		"eocw":      EOW,
+		"eod":       EOD,
+		"eom":       EOM,
+		"eoq":       EOQ,
+		"eow":       EOW,
+		"eoww":      EOWW,
+		"eoy":       EOY,
+		"last":      Last,
+		"later":     Whenever,
+		"next":      Next,
+		"now":       Now,
+		"shift":     Shift,
+		"shiftFrom": ShiftFrom,
+		"socm":      SOCM,
+		"socw":      SOCW,
+		"sod":       Tomorrow,
+		"som":       SOM,
+		"someday":   Whenever,
+		"soq":       SOQ,
+		"sow":       SOW,
+		"soww":      SOWW,
+		"soy":       SOY,
+		"today":     Today,
+		"tomorrow":  Tomorrow,
+		"whenever":  Whenever,
+		"yesterday": Yesterday,
 	}
 	for _, d := range daysOfWeek {
 		r[d] = NominalDay(t, d)
 	}
 	for _, m := range monthsOfYear {
 		r[m] = NominalMonth(t, m)
+	}
+	for k, _ := range r {
+		reservedKeys = append(reservedKeys, k)
 	}
 	return r
 }
@@ -74,6 +86,116 @@ var monthsOfYear = []string{
 	"january", "february", "march", "april",
 	"may", "june", "july", "august",
 	"september", "october", "november", "december",
+}
+
+// Return the TimeFunc of the provided string, relative to the Tart instance time.
+func (r *Relation) popTimeFn(at string) TimeFunc {
+	t := r.t
+	if tfn, ok := r.cc[at]; ok {
+		switch {
+		case strings.Contains(at, "!"):
+			if spl := strings.Split(at, "!"); len(spl) == 2 {
+				t.last = spl[1]
+			}
+		default:
+			t.last = at
+		}
+		return tfn
+	}
+
+	var rfn RelativeFunc
+	switch {
+	case strings.Contains(at, "!"):
+		if spl := strings.Split(at, "!"); len(spl) == 2 {
+			if fn, ok := r.rr[spl[0]]; ok {
+				t.last = spl[1]
+				rfn = fn
+			}
+		}
+	default:
+		t.last = at
+		if fn, ok := r.rr[at]; ok {
+			rfn = fn
+		} else {
+			rfn = r.rr["default"]
+		}
+	}
+
+	tfn := rfn(t)
+	r.cc[at] = tfn
+
+	return tfn
+}
+
+var reservedKeyError = func(k string) error {
+	return fmt.Errorf("'%s' is a relation reserved key", k)
+}
+
+func isReservedKey(k string) bool {
+	for _, v := range reservedKeys {
+		if k == v {
+			return true
+		}
+	}
+	return false
+}
+
+//
+func (r *Relation) SetRelative(k string, v RelativeFunc) error {
+	if !isReservedKey(k) {
+		r.rr[k] = v
+		return nil
+	}
+	return reservedKeyError(k)
+}
+
+//
+func (r *Relation) SetDirect(k string, v time.Time) error {
+	if !isReservedKey(k) {
+		r.rr[k] = wrapRelativeFunc(v)
+		return nil
+	}
+	return reservedKeyError(k)
+}
+
+func wrapRelativeFunc(t time.Time) RelativeFunc {
+	return func(*Tart) TimeFunc {
+		return func() time.Time {
+			return t
+		}
+	}
+}
+
+//
+func (r *Relation) SetParsed(k, v string) error {
+	if !isReservedKey(k) {
+		now := time.Now()
+		t, _ := dateparse.ParseIn(v, r.t.Location())
+		if y := t.Year(); y <= 0 {
+			t = t.AddDate(now.Year(), 0, 0)
+		}
+		r.rr[k] = func(*Tart) TimeFunc {
+			return func() time.Time {
+				return t
+			}
+		}
+		return nil
+	}
+	return reservedKeyError(k)
+}
+
+//
+func (r *Relation) SetBatch(in ...map[string]RelativeFunc) error {
+	var err error
+	for _, v := range in {
+		for kk, vv := range v {
+			err = r.SetRelative(kk, vv)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return err
 }
 
 // now from string "now" where "now" is tart.Time
@@ -380,7 +502,7 @@ func Whenever(t *Tart) TimeFunc {
 	}
 }
 
-//
+// Attempts to parse last to valid time
 func Any(t *Tart) TimeFunc {
 	return func() time.Time {
 		now := time.Now()
@@ -389,27 +511,6 @@ func Any(t *Tart) TimeFunc {
 			ret = ret.AddDate(now.Year(), 0, 0)
 		}
 		return ret
-	}
-}
-
-//
-func Associate(t *Tart) TimeFunc {
-	return func() time.Time {
-		return t.Associate("req", t.last)
-	}
-}
-
-//
-func AssociateWhere(t *Tart) TimeFunc {
-	return func() time.Time {
-		if vars := strings.Split(t.last, "where"); len(vars) >= 2 {
-			if splw := strings.Split(vars[1], "="); len(splw) == 2 {
-				wh := strings.TrimLeft(splw[0], " ")
-				t.AddAssociationString(wh, splw[1])
-				return t.Associate("req", strings.TrimRight(vars[0], " "))
-			}
-		}
-		return time.Time{}
 	}
 }
 

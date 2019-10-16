@@ -10,6 +10,8 @@ func TestTart(t *testing.T) {
 	tartInstance := New(HolidaysUS)
 	testTimeExact := time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local)
 	tartInstance.SetTime(testTimeExact)
+
+	// base
 	var testT = []struct {
 		req string
 		exp time.Time
@@ -19,6 +21,12 @@ func TestTart(t *testing.T) {
 		{"sod", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
 		{"eod", time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)},
 		{"tuesday", time.Date(2019, time.July, 9, 0, 0, 0, 0, time.Local)},
+		{"next!tuesday,0w", time.Date(2019, time.July, 9, 0, 0, 0, 0, time.Local)},
+		{"last!tuesday,1w", time.Date(2019, time.July, 2, 0, 0, 0, 0, time.Local)},
+		{"next!tuesday,1w", time.Date(2019, time.July, 16, 0, 0, 0, 0, time.Local)},
+		{"next!friday,0w", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
+		{"last!friday,1w", time.Date(2019, time.June, 28, 0, 0, 0, 0, time.Local)},
+		{"next!friday,1w", time.Date(2019, time.July, 12, 0, 0, 0, 0, time.Local)},
 		{"december", time.Date(2019, time.December, 1, 0, 0, 0, 0, time.Local)},
 		{"june", time.Date(2020, time.June, 1, 0, 0, 0, 0, time.Local)},
 		{"sow", time.Date(2019, time.July, 7, 0, 0, 0, 0, time.Local)},
@@ -39,10 +47,7 @@ func TestTart(t *testing.T) {
 		{"someday", time.Date(2077, time.April, 27, 14, 37, 0, 0, time.Local)},
 		{"july 4th 2099", time.Date(2099, time.July, 4, 0, 0, 0, 0, time.Local)},
 		{"july 4", time.Date(2019, time.July, 4, 0, 0, 0, 0, time.Local)},
-		//{"july 4th", time.Date(2020, time.July, 4, 0, 0, 0, 0, time.Local)},
-		{"associate!now+3d2h", time.Date(2019, time.July, 7, 14, 0, 0, 0, time.Local)},
-		{"associate!yesterday", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local)},
-		{"associateWhere!next-1d where next=July 4 2020", time.Date(2020, time.July, 3, 0, 0, 0, 0, time.Local)},
+		//{"4th of july", time.Date(2020, time.July, 4, 0, 0, 0, 0, time.Local)},
 		{"shift!-1h", time.Date(2019, time.July, 4, 11, 0, 0, 0, time.Local)},
 		{"shift!+1h", time.Date(2019, time.July, 4, 13, 0, 0, 0, time.Local)},
 		{"shift!-1d", time.Date(2019, time.July, 3, 12, 0, 0, 0, time.Local)},
@@ -57,8 +62,8 @@ func TestTart(t *testing.T) {
 		{"last!july 4,1y", time.Date(2018, time.July, 4, 0, 0, 0, 0, time.Local)},
 		{"next!july 4,1y", time.Date(2020, time.July, 4, 0, 0, 0, 0, time.Local)},
 		{"next!july 4,weekly", time.Date(2019, time.July, 11, 0, 0, 0, 0, time.Local)},
-		//{"last!july 4th,1y", time.Date(2018, time.July, 3, 0, 0, 0, 0, time.Local)},
-		//{"next!july 4th,1y", time.Date(2020, time.July, 3, 0, 0, 0, 0, time.Local)},
+		//{"last!christmas,1y", time.Date(2018, time.December, 25, 0, 0, 0, 0, time.Local)},
+		//{"next!christmas,1y", time.Date(2019, time.December, 25, 0, 0, 0, 0, time.Local)},
 	}
 	for _, v := range testT {
 		cmp := tartInstance.TimeOf(v.req)
@@ -67,6 +72,38 @@ func TestTart(t *testing.T) {
 		}
 	}
 
+	// Association
+	tartInstance.SetDirect("after", time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local))
+	tartInstance.SetDirect("before", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local))
+	tartInstance.SetRelative("end", wrapRelativeFunc(time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)))
+	tartInstance.SetParsed("start", "july 2 2019 12:01 PM")
+	var testAS = []struct {
+		k, v string
+		exp  time.Time
+	}{
+		{"as0", "start+1d", time.Date(2019, time.July, 3, 12, 1, 0, 0, time.Local)},
+		{"as1", "before+12h3m", time.Date(2019, time.July, 3, 12, 3, 0, 0, time.Local)},
+		{"as2", "end-59m", time.Date(2019, time.July, 4, 23, 0, 59, 0, time.Local)},
+		{"as3", "after-13h", time.Date(2019, time.July, 4, 23, 0, 0, 0, time.Local)},
+		{"as4", "now+1w", time.Date(2019, time.July, 11, 12, 0, 0, 0, time.Local)},
+	}
+	for _, v := range testAS {
+		cmp, err := tartInstance.Associate(v.k, v.v)
+		if err != nil {
+			t.Errorf("associate: %s,%s got error -- %s", v.k, v.v, err.Error())
+		}
+		if !cmp.Equal(v.exp) {
+			t.Errorf("associate: %s,%s expected %v, but got %v", v.k, v.v, v.exp, cmp)
+		}
+	}
+	for _, v := range testAS {
+		cmp := tartInstance.TimeOf(v.k)
+		if !cmp.Equal(v.exp) {
+			t.Errorf("TimeOf associated: %s expected %v, but got %v", strings.ToUpper(v.v), v.exp, cmp)
+		}
+	}
+
+	// Duration
 	testD := []struct {
 		id       string
 		pd       string
@@ -102,41 +139,6 @@ func TestTart(t *testing.T) {
 		}
 		if id != pd {
 			t.Errorf("unequal durations: %v != %v", id, pd)
-		}
-	}
-
-	// SetAssociationTime
-	var testAT = []struct {
-		k string
-		v time.Time
-	}{
-		{"before", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local)},
-		{"end", time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)},
-		{"after", time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local)},
-	}
-	for _, v := range testAT {
-		tartInstance.SetAssociationTime(v.k, v.v)
-	}
-
-	//AddAssociationString
-	var testAS = []struct {
-		k, v string
-		exp  time.Time
-	}{
-		{"start", "july 2 2019 12:01 PM", time.Date(2019, time.July, 2, 12, 1, 0, 0, time.Local)},
-		{"as0", "start+1d", time.Date(2019, time.July, 3, 12, 1, 0, 0, time.Local)},
-		{"as1", "before+12h3m", time.Date(2019, time.July, 3, 12, 3, 0, 0, time.Local)},
-		{"as2", "end-59m", time.Date(2019, time.July, 4, 23, 0, 59, 0, time.Local)},
-		{"as3", "after-13h", time.Date(2019, time.July, 4, 23, 0, 0, 0, time.Local)},
-		{"as4", "now+1w", time.Date(2019, time.July, 11, 12, 0, 0, 0, time.Local)},
-	}
-	for _, v := range testAS {
-		tartInstance.AddAssociationString(v.k, v.v)
-	}
-	for _, v := range testAS {
-		cmp := tartInstance.GetAssociationTime(v.k)
-		if !cmp.Equal(v.exp) {
-			t.Errorf("association %s expected %v, but got %v", strings.ToUpper(v.v), v.exp, cmp)
 		}
 	}
 }
