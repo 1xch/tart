@@ -1,42 +1,61 @@
 package tart
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/araddon/dateparse"
 )
 
+// Add the provided Relative key values to the instance maintained map of relations.
+func (t *Tart) AddRelative(r ...Relative) {
+	for _, rr := range r {
+		for k, v := range rr {
+			t.r[k] = v
+		}
+	}
+}
+
+//
 type RelativeFunc func(*Tart) TimeFunc
 
-type TimeFunc func() time.Time
-
+//
 type Relative map[string]RelativeFunc
 
 func defaultRelative(t *Tart) map[string]RelativeFunc {
 	r := map[string]RelativeFunc{
-		"yesterday": Yesterday,
-		"today":     Today,
-		"eod":       EOD,
-		"tomorrow":  Tomorrow,
-		"sod":       Tomorrow,
-		"sow":       SOW,
-		"socw":      SOCW,
-		"eow":       EOW,
-		"eocw":      EOW,
-		"soww":      SOWW,
-		"eoww":      EOWW,
-		"socm":      SOCM,
-		"som":       SOM,
-		"eom":       EOM,
-		"eocm":      EOM,
-		"soq":       SOQ,
-		"eoq":       EOQ,
-		"soy":       SOY,
-		"eoy":       EOY,
-		"someday":   Whenever,
-		"later":     Whenever,
-		"whenever":  Whenever,
-		"default":   Any,
+		"any":            Any,
+		"associate":      Associate,
+		"associateWhere": AssociateWhere,
+		"default":        Any,
+		"eocm":           EOM,
+		"eocw":           EOW,
+		"eod":            EOD,
+		"eom":            EOM,
+		"eoq":            EOQ,
+		"eow":            EOW,
+		"eoww":           EOWW,
+		"eoy":            EOY,
+		"last":           Last,
+		"later":          Whenever,
+		"next":           Next,
+		"now":            Now,
+		"shift":          Shift,
+		"shiftFrom":      ShiftFrom,
+		"socm":           SOCM,
+		"socw":           SOCW,
+		"sod":            Tomorrow,
+		"som":            SOM,
+		"someday":        Whenever,
+		"soq":            SOQ,
+		"sow":            SOW,
+		"soww":           SOWW,
+		"soy":            SOY,
+		"today":          Today,
+		"tomorrow":       Tomorrow,
+		"whenever":       Whenever,
+		"yesterday":      Yesterday,
 	}
 	for _, d := range daysOfWeek {
 		r[d] = NominalDay(t, d)
@@ -45,6 +64,23 @@ func defaultRelative(t *Tart) map[string]RelativeFunc {
 		r[m] = NominalMonth(t, m)
 	}
 	return r
+}
+
+var daysOfWeek = []string{
+	"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+}
+
+var monthsOfYear = []string{
+	"january", "february", "march", "april",
+	"may", "june", "july", "august",
+	"september", "october", "november", "december",
+}
+
+// now from string "now" where "now" is tart.Time
+func Now(t *Tart) TimeFunc {
+	return func() time.Time {
+		return t.Time
+	}
 }
 
 // Local date for yesterday, with time 00:00:00.
@@ -105,6 +141,10 @@ func Tomorrow(t *Tart) TimeFunc {
 
 var days *rn = ring(daysOfWeek)
 
+func weekday(t *Tart) string {
+	return strings.ToLower(t.Weekday().String())
+}
+
 // Local date for the specified day(monday, tuesday, etc), after today, with time 00:00:00.
 func NominalDay(t *Tart, d string) RelativeFunc {
 	return func(t *Tart) TimeFunc {
@@ -122,15 +162,28 @@ func NominalDay(t *Tart, d string) RelativeFunc {
 	}
 }
 
-func weekJump(t *Tart, v string, sub int) TimeFunc {
+func weekJump(t *Tart, v string, sub int, timeSub ...int) TimeFunc {
 	sd := weekday(t)
 	jump := days.jump(sd, v) - sub
+	var hour, min, secs int
+	l := len(timeSub)
+	if l > 0 {
+		if l >= 1 {
+			hour = timeSub[0]
+		}
+		if l >= 2 {
+			min = timeSub[1]
+		}
+		if l >= 3 {
+			secs = timeSub[2]
+		}
+	}
 	return func() time.Time {
 		return time.Date(
 			t.Year(),
 			t.Month(),
 			t.Day()+jump,
-			0, 0, 0, 0,
+			hour, min, secs, 0,
 			t.Location(),
 		)
 	}
@@ -139,81 +192,26 @@ func weekJump(t *Tart, v string, sub int) TimeFunc {
 // Local date for the next Sunday, with time 00:00:00.
 func SOW(t *Tart) TimeFunc {
 	return weekJump(t, "sunday", 0)
-	//sd := weekday(t)
-	//jump := days.jump(sd, "sunday")
-	//return func() time.Time {
-	//	return time.Date(
-	//		t.Year(),
-	//		t.Month(),
-	//		t.Day()+jump,
-	//		0, 0, 0, 0,
-	//		t.Location(),
-	//	)
-	//}
 }
 
 // Local date for the last Sunday, with time 00:00:00.
 func SOCW(t *Tart) TimeFunc {
 	return weekJump(t, "sunday", 7)
-	//sd := weekday(t)
-	//jump := days.jump(sd, "sunday") - 7
-	//return func() time.Time {
-	//	return time.Date(
-	//		t.Year(),
-	//		t.Month(),
-	//		t.Day()+jump,
-	//		0, 0, 0, 0,
-	//		t.Location(),
-	//	)
-	//}
 }
 
 // Local date for the end of the week, Saturday night, with time 00:00:00.
 func EOW(t *Tart) TimeFunc {
 	return weekJump(t, "saturday", 0)
-	//sd := weekday(t)
-	//jump := days.jump(sd, "saturday")
-	//return func() time.Time {
-	//	return time.Date(
-	//		t.Year(),
-	//		t.Month(),
-	//		t.Day()+jump,
-	//		0, 0, 0, 0,
-	//		t.Location(),
-	//	)
-	//}
 }
 
 // Local date for the start of the work week, next Monday, with time 00:00:00.
 func SOWW(t *Tart) TimeFunc {
 	return weekJump(t, "monday", 0)
-	//sd := weekday(t)
-	//jump := days.jump(sd, "monday")
-	//return func() time.Time {
-	//	return time.Date(
-	//		t.Year(),
-	//		t.Month(),
-	//		t.Day()+jump,
-	//		0, 0, 0, 0,
-	//		t.Location(),
-	//	)
-	//}
 }
 
 // Local date for the end of the work week, Friday night, with time 23:59:59.
 func EOWW(t *Tart) TimeFunc {
-	return weekJump(t, "friday", 0)
-	//sd := weekday(t)
-	//jump := days.jump(sd, "friday")
-	//return func() time.Time {
-	//	return time.Date(
-	//		t.Year(),
-	//		t.Month(),
-	//		t.Day()+jump,
-	//		0, 0, 0, 0,
-	//		t.Location(),
-	//	)
-	//}
+	return weekJump(t, "friday", 0, 23, 59, 59)
 }
 
 //1st, 2nd, ... 	Local date for the next Nth day, with time 00:00:00.
@@ -221,17 +219,16 @@ func EOWW(t *Tart) TimeFunc {
 
 var months *rn = ring(monthsOfYear)
 
+func month(t *Tart) string {
+	return strings.ToLower(t.Month().String())
+}
+
 // Local date for the specified month(january, february, etc), 1st day, with time 00:00:00.
-func NominalMonth(t *Tart, d string) RelativeFunc {
+func NominalMonth(t *Tart, m string) RelativeFunc {
 	return func(t *Tart) TimeFunc {
 		sm := month(t)
-		var mn int
-		for idx, v := range monthsOfYear {
-			if sm == v {
-				mn = idx + 1
-			}
-		}
-		jump := months.jump(sm, d)
+		mn := months.jump("january", sm) + 1
+		jump := months.jump(sm, m)
 		return func() time.Time {
 			return time.Date(
 				t.Year(),
@@ -260,12 +257,7 @@ func SOCM(t *Tart) TimeFunc {
 // Local date for the 1st day of the next month, with time 00:00:00.
 func SOM(t *Tart) TimeFunc {
 	sm := month(t)
-	var mn int
-	for idx, v := range monthsOfYear {
-		if sm == v {
-			mn = idx + 1
-		}
-	}
+	mn := months.jump("january", sm) + 1
 	return func() time.Time {
 		return time.Date(
 			t.Year(),
@@ -280,12 +272,7 @@ func SOM(t *Tart) TimeFunc {
 // Local date for the last day of the current month, with time 23:59:59.
 func EOM(t *Tart) TimeFunc {
 	sm := month(t)
-	var mn int
-	for idx, v := range monthsOfYear {
-		if sm == v {
-			mn = idx + 1
-		}
-	}
+	mn := months.jump("january", sm) + 1
 	return func() time.Time {
 		d := time.Date(
 			t.Year(),
@@ -379,31 +366,100 @@ func EOY(t *Tart) TimeFunc {
 	}
 }
 
-// Whenver, later, someday 	Local 2044-10-16, with time 13:37:00.
+// Whenver, later, someday 	Local 2077-04-27, with time 14:37:00.
 // A date far away.
 func Whenever(t *Tart) TimeFunc {
 	return func() time.Time {
 		return time.Date(
-			2044,
-			time.Month(10),
-			16,
-			13, 37, 0, 0,
+			2077,
+			time.Month(4),
+			27,
+			14, 37, 0, 0,
 			t.Location(),
 		)
 	}
 }
 
+//
 func Any(t *Tart) TimeFunc {
 	return func() time.Time {
+		now := time.Now()
 		ret, _ := dateparse.ParseIn(t.last, t.Location())
+		if y := ret.Year(); y <= 0 {
+			ret = ret.AddDate(now.Year(), 0, 0)
+		}
 		return ret
 	}
 }
 
-//goodfriday 	Local date for the next Good Friday, with time 00:00:00.
-//easter 	Local date for the next Easter Sunday, with time 00:00:00.
-//eastermonday 	Local date for the next Easter Monday, with time 00:00:00.
-//ascension 	Local date for the next Ascension (39 days after Easter Sunday), with time 00:00:00.
-//pentecost 	Local date for the next Pentecost (40 days after Easter Sunday), with time 00:00:00.
-//midsommar 	Local date for the Saturday after June 20th, with time 00:00:00. Swedish.
-//midsommarafton 	Local date for the Friday after June 19th, with time 00:00:00. Swedish.
+//
+func Associate(t *Tart) TimeFunc {
+	return func() time.Time {
+		return t.Associate("req", t.last)
+	}
+}
+
+//
+func AssociateWhere(t *Tart) TimeFunc {
+	return func() time.Time {
+		if vars := strings.Split(t.last, "where"); len(vars) >= 2 {
+			if splw := strings.Split(vars[1], "="); len(splw) == 2 {
+				wh := strings.TrimLeft(splw[0], " ")
+				t.AddAssociationString(wh, splw[1])
+				return t.Associate("req", strings.TrimRight(vars[0], " "))
+			}
+		}
+		return time.Time{}
+	}
+}
+
+// an arbitrary time shift of now with now being the tart.Time
+func Shift(t *Tart) TimeFunc {
+	shift := t.DurationOf(t.last)
+	return func() time.Time {
+		return t.Add(shift)
+	}
+}
+
+// an arbitrary time shift from a specific point(must be return from TimeOf)
+func ShiftFrom(t *Tart) TimeFunc {
+	var from = time.Time{}
+	var shift = time.Duration(0)
+
+	if vars := strings.Split(t.last, ","); len(vars) >= 2 {
+		from = t.TimeOf(vars[0])
+		shift = t.DurationOf(vars[1])
+	}
+
+	return func() time.Time {
+		return from.Add(shift)
+	}
+}
+
+// The next iteration of time at interval
+// e.g. next!July 4,1y = July 4 2020 (where time now is July 4 2019)
+func Next(t *Tart) TimeFunc {
+	var date time.Time = time.Time{}
+	var dur time.Duration = zeroD
+	if spl := strings.Split(t.last, ","); len(spl) >= 2 {
+		date = t.TimeOf(spl[0])
+		dur = t.DurationOf(spl[1])
+	}
+	return func() time.Time {
+		return date.Add(dur)
+	}
+}
+
+// The last iteration of time at interval
+// e.g. last!July 4,1y = July 4 2018 (where time now is July 4 2019)
+func Last(t *Tart) TimeFunc {
+	var date time.Time = time.Time{}
+	var dur time.Duration = zeroD
+	if spl := strings.Split(t.last, ","); len(spl) >= 2 {
+		date = t.TimeOf(spl[0])
+		dur = t.DurationOf(fmt.Sprintf("-%s", spl[1]))
+	}
+	return func() time.Time {
+		return date.Add(dur)
+	}
+}
