@@ -18,6 +18,7 @@ type Tart struct {
 	*Supplement
 	*Relation
 	last string
+	dir  *directive
 	tFmt string
 }
 

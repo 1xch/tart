@@ -96,7 +96,9 @@ func monthsOfYear() []string {
 func (r *Relation) popTimeFn(at string) TimeFunc {
 	t := r.t
 
-	// directive, phrase := parse(at)
+	//var dir *directive
+	//var phrase string
+	t.dir, t.last = parse(at)
 
 	//if tfn, ok := r.cc[at]; ok {
 	//	switch {
@@ -111,31 +113,50 @@ func (r *Relation) popTimeFn(at string) TimeFunc {
 	//}
 
 	var rfn RelativeFunc
-	switch {
-	case strings.Contains(at, "!"):
-		if spl := strings.Split(at, "!"); len(spl) == 2 {
-			if fn, ok := r.rr[spl[0]]; ok {
-				t.last = spl[1]
-				rfn = fn
-			}
-		}
-	default:
-		t.last = at
-		if fn, ok := r.rr[at]; ok {
-			rfn = fn
-		} else {
-			rfn = r.rr["default"]
-		}
+	//switch {
+	//case strings.Contains(at, "!"):
+	//	if spl := strings.Split(at, "!"); len(spl) == 2 {
+	//		if fn, ok := r.rr[spl[0]]; ok {
+	//			t.last = spl[1]
+	//			rfn = fn
+	//		}
+	//	}
+	//default:
+	if fn, ok := r.rr[t.last]; ok {
+		rfn = fn
+	} else {
+		rfn = r.rr["default"]
 	}
+	//}
 
 	tfn := rfn(t)
-	r.cc[at] = tfn
+	r.cc[t.last] = tfn
 
 	return tfn
 }
 
-func parse(in string) (string, string) {
-	return "", ""
+func parse(in string) (*directive, string) {
+	return defaultDirective(), in
+}
+
+type directive struct {
+	kind  string
+	count int
+}
+
+func defaultDirective() *directive {
+	return &directive{"+", 0}
+}
+
+func validDirective(in string) bool {
+	var ret bool
+	switch in {
+	case "+", "-", "<", ">":
+		ret = true
+	default:
+		ret = false
+	}
+	return ret
 }
 
 func reservedKeyError(k string) error {
