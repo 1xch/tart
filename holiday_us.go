@@ -1,14 +1,16 @@
 package tart
 
+// HolidaysUS ...
 func HolidaysUS(t *Tart) {
-	t.SetBatch(
+	_ = t.SetBatch(
 		holidaysUSBase(t),
 		holidaysUSX(t),
 	)
 }
 
+// HolidaysUSBase ...
 func HolidaysUSBase(t *Tart) {
-	t.SetBatch(holidaysUSBase(t))
+	_ = t.SetBatch(holidaysUSBase(t))
 }
 
 func holidaysUSBase(t *Tart) map[string]RelativeFunc {
@@ -20,8 +22,9 @@ func holidaysUSBase(t *Tart) map[string]RelativeFunc {
 	}
 }
 
+// HolidaysUSX ...
 func HolidaysUSX(t *Tart) {
-	t.SetBatch(holidaysUSX(t))
+	_ = t.SetBatch(holidaysUSX(t))
 }
 
 func holidaysUSX(t *Tart) map[string]RelativeFunc {
@@ -37,15 +40,3 @@ func holidaysUSX(t *Tart) map[string]RelativeFunc {
 		//labor
 	}
 }
-
-//black
-////-mlk
-////-junteenth
-//christian
-////-good friday
-////-easter
-//drinkin'
-//hindu
-//islamic
-//jewish
-//other

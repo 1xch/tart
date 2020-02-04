@@ -8,16 +8,19 @@ import (
 	"github.com/araddon/dateparse"
 )
 
-//
+// Relation is a struct managing core time relations for a Tart instance.
 type Relation struct {
 	t  *Tart
 	rr map[string]RelativeFunc
 	cc map[string]TimeFunc
+	rk []string
 }
 
 type (
-	RelativeFunc func(*Tart) TimeFunc //
-	TimeFunc     func() time.Time     //
+	// RelativeFunc ...
+	RelativeFunc func(*Tart) TimeFunc
+	// TimeFunc ...
+	TimeFunc func() time.Time
 )
 
 func newRelation(t *Tart) *Relation {
@@ -28,13 +31,11 @@ func newRelation(t *Tart) *Relation {
 
 func (r *Relation) reset(t *Tart) {
 	r.t = t
-	r.rr = defaultRelativeFuncs(r.t)
+	r.rr, r.rk = defaultRelativeFuncs(r.t)
 	r.cc = make(map[string]TimeFunc)
 }
 
-var reservedKeys []string
-
-func defaultRelativeFuncs(t *Tart) map[string]RelativeFunc {
+func defaultRelativeFuncs(t *Tart) (map[string]RelativeFunc, []string) {
 	r := map[string]RelativeFunc{
 		"any":       Any,
 		"default":   Any,
@@ -46,9 +47,7 @@ func defaultRelativeFuncs(t *Tart) map[string]RelativeFunc {
 		"eow":       EOW,
 		"eoww":      EOWW,
 		"eoy":       EOY,
-		"last":      Last,
 		"later":     Whenever,
-		"next":      Next,
 		"now":       Now,
 		"shift":     Shift,
 		"shiftFrom": ShiftFrom,
@@ -66,42 +65,50 @@ func defaultRelativeFuncs(t *Tart) map[string]RelativeFunc {
 		"whenever":  Whenever,
 		"yesterday": Yesterday,
 	}
-	for _, d := range daysOfWeek {
+	for _, d := range daysOfWeek() {
 		r[d] = NominalDay(t, d)
 	}
-	for _, m := range monthsOfYear {
+	for _, m := range monthsOfYear() {
 		r[m] = NominalMonth(t, m)
 	}
+	var rk []string
 	for k, _ := range r {
-		reservedKeys = append(reservedKeys, k)
+		rk = append(rk, k)
 	}
-	return r
+	return r, rk
 }
 
-var daysOfWeek = []string{
-	"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+func daysOfWeek() []string {
+	return []string{
+		"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+	}
 }
 
-var monthsOfYear = []string{
-	"january", "february", "march", "april",
-	"may", "june", "july", "august",
-	"september", "october", "november", "december",
+func monthsOfYear() []string {
+	return []string{
+		"january", "february", "march", "april",
+		"may", "june", "july", "august",
+		"september", "october", "november", "december",
+	}
 }
 
 // Return the TimeFunc of the provided string, relative to the Tart instance time.
 func (r *Relation) popTimeFn(at string) TimeFunc {
 	t := r.t
-	if tfn, ok := r.cc[at]; ok {
-		switch {
-		case strings.Contains(at, "!"):
-			if spl := strings.Split(at, "!"); len(spl) == 2 {
-				t.last = spl[1]
-			}
-		default:
-			t.last = at
-		}
-		return tfn
-	}
+
+	// directive, phrase := parse(at)
+
+	//if tfn, ok := r.cc[at]; ok {
+	//	switch {
+	//	case strings.Contains(at, "!"):
+	//		if spl := strings.Split(at, "!"); len(spl) == 2 {
+	//			t.last = spl[1]
+	//		}
+	//	default:
+	//		t.last = at
+	//	}
+	//	return tfn
+	//}
 
 	var rfn RelativeFunc
 	switch {
@@ -127,12 +134,16 @@ func (r *Relation) popTimeFn(at string) TimeFunc {
 	return tfn
 }
 
-var reservedKeyError = func(k string) error {
+func parse(in string) (string, string) {
+	return "", ""
+}
+
+func reservedKeyError(k string) error {
 	return fmt.Errorf("'%s' is a relation reserved key", k)
 }
 
-func isReservedKey(k string) bool {
-	for _, v := range reservedKeys {
+func isReservedKey(rk []string, k string) bool {
+	for _, v := range rk {
 		if k == v {
 			return true
 		}
@@ -140,18 +151,18 @@ func isReservedKey(k string) bool {
 	return false
 }
 
-//
+// SetRelative ...
 func (r *Relation) SetRelative(k string, v RelativeFunc) error {
-	if !isReservedKey(k) {
+	if !isReservedKey(r.rk, k) {
 		r.rr[k] = v
 		return nil
 	}
 	return reservedKeyError(k)
 }
 
-//
+// SetDirect ...
 func (r *Relation) SetDirect(k string, v time.Time) error {
-	if !isReservedKey(k) {
+	if !isReservedKey(r.rk, k) {
 		r.rr[k] = wrapRelativeFunc(v)
 		return nil
 	}
@@ -166,9 +177,9 @@ func wrapRelativeFunc(t time.Time) RelativeFunc {
 	}
 }
 
-//
+// SetParsed ...
 func (r *Relation) SetParsed(k, v string) error {
-	if !isReservedKey(k) {
+	if !isReservedKey(r.rk, k) {
 		now := time.Now()
 		t, _ := dateparse.ParseIn(v, r.t.Location())
 		if y := t.Year(); y <= 0 {
@@ -184,7 +195,7 @@ func (r *Relation) SetParsed(k, v string) error {
 	return reservedKeyError(k)
 }
 
-//
+// SetBatch ...
 func (r *Relation) SetBatch(in ...map[string]RelativeFunc) error {
 	var err error
 	for _, v := range in {
@@ -198,14 +209,14 @@ func (r *Relation) SetBatch(in ...map[string]RelativeFunc) error {
 	return err
 }
 
-// now from string "now" where "now" is tart.Time
+// Now returns TimeFunc for "now" from string "now" where "now" is tart.Time
 func Now(t *Tart) TimeFunc {
 	return func() time.Time {
 		return t.Time
 	}
 }
 
-// Local date for yesterday, with time 00:00:00.
+// Yesterday returns TimeFunc giving local date for yesterday, with time 00:00:00.
 func Yesterday(t *Tart) TimeFunc {
 	yt := t.Add(-time.Duration(time.Hour * 24))
 	return func() time.Time {
@@ -219,7 +230,7 @@ func Yesterday(t *Tart) TimeFunc {
 	}
 }
 
-// Current local date, with time 00:00:00.
+// Today returns TimeFunc giving current local date, with time 00:00:00.
 func Today(t *Tart) TimeFunc {
 	tn := t.Time
 	return func() time.Time {
@@ -233,7 +244,7 @@ func Today(t *Tart) TimeFunc {
 	}
 }
 
-// End of day is current local date, with time 23:59:59.
+// EOD returns TimeFunc for "eod" where end of day is current local date, with time 23:59:59.
 func EOD(t *Tart) TimeFunc {
 	tn := t.Time
 	return func() time.Time {
@@ -247,9 +258,9 @@ func EOD(t *Tart) TimeFunc {
 	}
 }
 
-// Local date for tomorrow, with time 00:00:00. Same as sod(start of day).
+// Tomorrow returns TimeFunc for "tomorrow" as local date for tomorrow, with time 00:00:00. Same as sod(start of day).
 func Tomorrow(t *Tart) TimeFunc {
-	tt := t.Add(time.Duration(time.Hour * 24))
+	tt := t.Add(time.Hour * 24)
 	return func() time.Time {
 		return time.Date(
 			tt.Year(),
@@ -261,13 +272,15 @@ func Tomorrow(t *Tart) TimeFunc {
 	}
 }
 
-var days *rn = ring(daysOfWeek)
+var days *rn = ring(daysOfWeek())
 
 func weekday(t *Tart) string {
 	return strings.ToLower(t.Weekday().String())
 }
 
-// Local date for the specified day(monday, tuesday, etc), after today, with time 00:00:00.
+// NominalDay returns RelativeFunc. The subsequent TimeFunc returned generates
+// local date for the specified day(monday, tuesday, etc), after today, with
+// time 00:00:00.
 func NominalDay(t *Tart, d string) RelativeFunc {
 	return func(t *Tart) TimeFunc {
 		sd := weekday(t)
@@ -311,27 +324,32 @@ func weekJump(t *Tart, v string, sub int, timeSub ...int) TimeFunc {
 	}
 }
 
-// Local date for the next Sunday, with time 00:00:00.
+// SOW returns TimeFunc providing local date for the next Sunday, with time
+// 00:00:00.
 func SOW(t *Tart) TimeFunc {
 	return weekJump(t, "sunday", 0)
 }
 
-// Local date for the last Sunday, with time 00:00:00.
+// SOCW returns TimeFunc providing local date for the last Sunday, with time
+// 00:00:00.
 func SOCW(t *Tart) TimeFunc {
 	return weekJump(t, "sunday", 7)
 }
 
-// Local date for the end of the week, Saturday night, with time 00:00:00.
+// EOW returns TimeFunc for local date for the end of the week, Saturday night,
+// with time 00:00:00.
 func EOW(t *Tart) TimeFunc {
 	return weekJump(t, "saturday", 0)
 }
 
-// Local date for the start of the work week, next Monday, with time 00:00:00.
+// SOWW returns TimeFunc providing local date for the start of the work week,
+// next Monday, with time 00:00:00.
 func SOWW(t *Tart) TimeFunc {
 	return weekJump(t, "monday", 0)
 }
 
-// Local date for the end of the work week, Friday night, with time 23:59:59.
+// EOWW returns TimeFunc for local date for the end of the work week, Friday
+// night, with time 23:59:59.
 func EOWW(t *Tart) TimeFunc {
 	return weekJump(t, "friday", 0, 23, 59, 59)
 }
@@ -339,13 +357,15 @@ func EOWW(t *Tart) TimeFunc {
 //1st, 2nd, ... 	Local date for the next Nth day, with time 00:00:00.
 //func OrdinalDay(d string) time.Time {}
 
-var months *rn = ring(monthsOfYear)
+var months *rn = ring(monthsOfYear())
 
 func month(t *Tart) string {
 	return strings.ToLower(t.Month().String())
 }
 
-// Local date for the specified month(january, february, etc), 1st day, with time 00:00:00.
+// NominalMonth returns a RelativeFunc returning a subsequent TimeFunc for
+// local date for the specified month(january, february, etc), 1st day, with
+// time 00:00:00.
 func NominalMonth(t *Tart, m string) RelativeFunc {
 	return func(t *Tart) TimeFunc {
 		sm := month(t)
@@ -363,7 +383,8 @@ func NominalMonth(t *Tart, m string) RelativeFunc {
 	}
 }
 
-// Local date for the 1st day of the current month, with time 00:00:00.
+// SOCM returns TimeFunc for local date for the 1st day of the current month,
+// with time 00:00:00.
 func SOCM(t *Tart) TimeFunc {
 	return func() time.Time {
 		return time.Date(
@@ -376,7 +397,8 @@ func SOCM(t *Tart) TimeFunc {
 	}
 }
 
-// Local date for the 1st day of the next month, with time 00:00:00.
+// SOM returns TimeFunc providing local date for the 1st day of the next month,
+// with time 00:00:00.
 func SOM(t *Tart) TimeFunc {
 	sm := month(t)
 	mn := months.jump("january", sm) + 1
@@ -391,7 +413,8 @@ func SOM(t *Tart) TimeFunc {
 	}
 }
 
-// Local date for the last day of the current month, with time 23:59:59.
+// EOM returns TimeFunc providing local date for the last day of the current
+// month, with time 23:59:59.
 func EOM(t *Tart) TimeFunc {
 	sm := month(t)
 	mn := months.jump("january", sm) + 1
@@ -420,8 +443,8 @@ func quarters(year int, z *time.Location) map[string]time.Time {
 	}
 }
 
-// Local date for the start of the next quarter (January, April, July, October),
-// 1st, with time 00:00:00.
+// SOQ returns TimeFunc providing local date for the start of the next quarter
+// (January, April, July, October), 1st, with time 00:00:00.
 func SOQ(t *Tart) TimeFunc {
 	q := quarters(t.Year(), t.Location())
 	var ret time.Time
@@ -441,8 +464,9 @@ func SOQ(t *Tart) TimeFunc {
 	}
 }
 
-// Local date for the end of the current quarter (March, June, September, December),
-// last day of the month, with time 23:59:59.
+// EOQ returns TimeFunc providing local date for the end of the current quarter
+// (March, June, September, December), last day of the month, with time
+// 23:59:59.
 func EOQ(t *Tart) TimeFunc {
 	q := quarters(t.Year(), t.Location())
 	var ret time.Time
@@ -462,7 +486,8 @@ func EOQ(t *Tart) TimeFunc {
 	}
 }
 
-// Local date for the next year, January 1st, with time 00:00:00.
+// SOY returns TimeFunc providing local date for the next year, January 1st,
+// with time 00:00:00.
 func SOY(t *Tart) TimeFunc {
 	return func() time.Time {
 		return time.Date(
@@ -475,7 +500,8 @@ func SOY(t *Tart) TimeFunc {
 	}
 }
 
-// Local date for this year, December 31st, with time 00:00:00.
+// EOY returns TimeFunc providing local date for this year, December 31st, with
+// time 00:00:00.
 func EOY(t *Tart) TimeFunc {
 	return func() time.Time {
 		return time.Date(
@@ -488,8 +514,8 @@ func EOY(t *Tart) TimeFunc {
 	}
 }
 
-// Whenver, later, someday 	Local 2077-04-27, with time 14:37:00.
-// A date far away.
+// Whenever returns TimeFunc for "whenever", "later", "someday" mapped to local
+// 2077-04-27, with time 14:37:00. A date far away.
 func Whenever(t *Tart) TimeFunc {
 	return func() time.Time {
 		return time.Date(
@@ -502,7 +528,7 @@ func Whenever(t *Tart) TimeFunc {
 	}
 }
 
-// Attempts to parse last to valid time
+// Any returns TimeFunc that attempts to parse Tart.last to a valid time.
 func Any(t *Tart) TimeFunc {
 	return func() time.Time {
 		now := time.Now()
@@ -514,7 +540,8 @@ func Any(t *Tart) TimeFunc {
 	}
 }
 
-// an arbitrary time shift of now with now being the tart.Time
+// Shift returns TimeFunc for an arbitrary time shift from now derived from
+// Tart.last, with now being the tart.Time.
 func Shift(t *Tart) TimeFunc {
 	shift := t.DurationOf(t.last)
 	return func() time.Time {
@@ -522,7 +549,8 @@ func Shift(t *Tart) TimeFunc {
 	}
 }
 
-// an arbitrary time shift from a specific point(must be return from TimeOf)
+// ShiftFrom returns TimeFunc for an arbitrary time shift from a specific
+// point(that must be return from TimeOf) derived from Tart.last.
 func ShiftFrom(t *Tart) TimeFunc {
 	var from = time.Time{}
 	var shift = time.Duration(0)
@@ -537,30 +565,33 @@ func ShiftFrom(t *Tart) TimeFunc {
 	}
 }
 
-// The next iteration of time at interval
-// e.g. next!July 4,1y = July 4 2020 (where time now is July 4 2019)
-func Next(t *Tart) TimeFunc {
-	var date time.Time = time.Time{}
-	var dur time.Duration = zeroD
-	if spl := strings.Split(t.last, ","); len(spl) >= 2 {
-		date = t.TimeOf(spl[0])
-		dur = t.DurationOf(spl[1])
-	}
-	return func() time.Time {
-		return date.Add(dur)
-	}
-}
+// Next returns TimeFunc for the next iteration of time within span
+// e.g. next!July 4,0y = July 4 2019 (where time now is January 1 2019)
+//      next!July 4,0y = July 4 2020 (where time now is October 1 2019)
+//func Next(t *Tart) TimeFunc {
+//	var date time.Time = time.Time{}
+//	var dur time.Duration = zeroD()
+//	if spl := strings.Split(t.last, ","); len(spl) >= 2 {
+//		date = t.TimeOf(spl[0])
+//		dur = t.DurationOf(spl[1])
+//	}
+//
+//	return func() time.Time {
+//		return date.Add(dur)
+//	}
+//}
 
-// The last iteration of time at interval
-// e.g. last!July 4,1y = July 4 2018 (where time now is July 4 2019)
-func Last(t *Tart) TimeFunc {
-	var date time.Time = time.Time{}
-	var dur time.Duration = zeroD
-	if spl := strings.Split(t.last, ","); len(spl) >= 2 {
-		date = t.TimeOf(spl[0])
-		dur = t.DurationOf(fmt.Sprintf("-%s", spl[1]))
-	}
-	return func() time.Time {
-		return date.Add(dur)
-	}
-}
+// Last returns TimeFunc for the last iteration of time at interval
+// e.g. last!July 4,0y = July 4 2018 (where time now is January 1 2019)
+//		last!July 4,0y = July 4 2019 (where time now is October 1 2019)
+//func Last(t *Tart) TimeFunc {
+//	var date time.Time = time.Time{}
+//	var dur time.Duration = zeroD()
+//	if spl := strings.Split(t.last, ","); len(spl) >= 2 {
+//		date = t.TimeOf(spl[0])
+//		dur = t.DurationOf(fmt.Sprintf("-%s", spl[1]))
+//	}
+//	return func() time.Time {
+//		return date.Add(dur)
+//	}
+//}

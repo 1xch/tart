@@ -1,13 +1,3 @@
-// deeply indebted to:
-// https://github.com/karrick/tparse
-// https://github.com/araddon/dateparse
-// https://github.com/wlbr/feiertage
-
-// TODO
-//	- ordinal management (4th, 22nd, 31st, etc)
-//  - expressions to flatten api & expand functionality
-//  - distance (between 2 dates)
-//  - actual implementation and testing or holidays current skeleton
 package tart
 
 import (
@@ -20,43 +10,49 @@ import (
 	"unicode"
 )
 
-// A struct encapsulating functionality related to a specific, embedded time.Time
-// instance. A fuzzy acronym for "time and relative time in time".
+// Tart is a a struct encapsulating functionality related to a specific,
+// embedded time.Time instance. An acronym for "time and relative time(in
+// time)".
 type Tart struct {
 	time.Time
 	*Supplement
 	*Relation
 	last string
+	tFmt string
 }
 
-//
+// New builds a new Tart instance from the provided Config.
 func New(cnf ...Config) *Tart {
 	t := &Tart{}
-	config := append(defaultConfig, cnf...)
+	config := mkConfig(cnf...)
 	for _, fn := range config {
 		fn(t)
 	}
 	return t
 }
 
-//
+// Config is a function taking a *Tart instance.
 type Config func(*Tart)
 
-var defaultConfig = []Config{
-	func(t *Tart) { t.Time = time.Now() },
-	func(t *Tart) { t.Supplement = defaultSupplement() },
-	func(t *Tart) { t.Relation = newRelation(t) },
+func mkConfig(cnf ...Config) []Config {
+	def := []Config{
+		func(t *Tart) { t.Time = time.Now() },
+		func(t *Tart) { t.Supplement = defaultSupplement() },
+		func(t *Tart) { t.Relation = newRelation(t) },
+		func(t *Tart) { t.tFmt = time.RFC3339 },
+	}
+	def = append(def, cnf...)
+	return def
 }
 
-var timeFmt = time.RFC3339
-
+// SetTimeFmt ...
 func SetTimeFmt(n string) Config {
 	return func(t *Tart) {
-		timeFmt = n
+		t.tFmt = n
 	}
 }
 
-// Set the time of the instance to the provided time. This forces a reset to
+// SetTime sets the time of the instance to the provided time. This forces a reset to
 // align the instance to the new time setting all relative funcs to defaults,
 // removing cached time funcs, and erasing any set associations.
 func (t *Tart) SetTime(tt time.Time) {
@@ -68,13 +64,13 @@ func (t *Tart) reset() {
 	t.Relation.reset(t)
 }
 
-// Return the time of the provided string, relative to the Tart instance time.
+// TimeOf returns the time of the provided string, relative to the Tart instance time.
 func (t *Tart) TimeOf(at string) time.Time {
 	fn := t.popTimeFn(at)
 	return fn()
 }
 
-//
+// Associate ...
 func (t *Tart) Associate(k, v string) (time.Time, error) {
 	if err := association(k, v, t.rr, t); err != nil {
 		return time.Time{}, err
@@ -86,7 +82,7 @@ func association(key, value string, r map[string]RelativeFunc, b *Tart) error {
 	if epoch, err := strconv.ParseFloat(value, 64); err == nil && epoch >= 0 {
 		trunc := math.Trunc(epoch)
 		nanos := fractionToNanos(epoch - trunc)
-		r[key] = wrapRelativeFunc(time.Unix(int64(trunc), int64(nanos)))
+		r[key] = wrapRelativeFunc(time.Unix(int64(trunc), nanos))
 		return nil
 	}
 	var base RelativeFunc
@@ -129,7 +125,7 @@ func association(key, value string, r map[string]RelativeFunc, b *Tart) error {
 			return nil
 		}
 	}
-	nt, fErr := time.Parse(timeFmt, value)
+	nt, fErr := time.Parse(b.tFmt, value)
 	if fErr == nil {
 		r[key] = wrapRelativeFunc(nt)
 	}
@@ -186,7 +182,7 @@ func ymd(value string) (int, int, int, string) {
 	return y, m, d, string(unproc)
 }
 
-// Given a request string duration, gives a duration and error.
+// DurationOf returns time.Duration of the provided string.
 // Accepts certain shorthand variations on a duration such as "yearly" or "monthly",
 // that convert to durations which of necessity are fuzzy dependent on when they are
 // calculated. This can be frustrating, but allows you degrees of freedom to tailor
@@ -210,17 +206,20 @@ func ymd(value string) (int, int, int, string) {
 // * Year: y, yr, year, years
 func (t *Tart) DurationOf(dur string) time.Duration {
 	t.last = dur
-	if dur, err := isDuration(dur, t.Time, t.Units, t.Replace); err == nil {
+	if dur, err := isDuration(dur, t.Time, t.units, t.replace); err == nil {
 		return dur
 	}
-	return zeroD
+	return zeroD()
 }
 
-var zeroD = time.Duration(0)
+func zeroD() time.Duration {
+	return time.Duration(0)
+}
 
-func isDuration(s string, when time.Time, u *Units, r *Replace) (time.Duration, error) {
+// TODO: reduce cyclomatic complexity
+func isDuration(s string, when time.Time, u *units, r *replace) (time.Duration, error) {
 	if len(s) == 0 {
-		return zeroD, nil
+		return zeroD(), nil
 	}
 
 	// catch some common but not easily parsed durations
@@ -235,13 +234,13 @@ func isDuration(s string, when time.Time, u *Units, r *Replace) (time.Duration, 
 		// consume possible sign
 		if s[0] == '+' {
 			if len(s) == 1 {
-				return zeroD, fmt.Errorf("cannot parse sign without digits: '+'")
+				return zeroD(), fmt.Errorf("cannot parse sign without digits: '+'")
 			}
 			isNegative = false
 			s = s[1:]
 		} else if s[0] == '-' {
 			if len(s) == 1 {
-				return zeroD, fmt.Errorf("cannot parse sign without digits: '-'")
+				return zeroD(), fmt.Errorf("cannot parse sign without digits: '-'")
 			}
 			isNegative = true
 			s = s[1:]
@@ -262,7 +261,7 @@ func isDuration(s string, when time.Time, u *Units, r *Replace) (time.Duration, 
 				s = s[1:]
 			case c == '.':
 				if exp > 0 {
-					return zeroD, fmt.Errorf("invalid floating point number format: two decimal points found")
+					return zeroD(), fmt.Errorf("invalid floating point number format: two decimal points found")
 				}
 				exp = 1
 				fraction = 0
@@ -297,7 +296,7 @@ func isDuration(s string, when time.Time, u *Units, r *Replace) (time.Duration, 
 			case "y", "yr", "year", "years":
 				totalYears += number
 			default:
-				return zeroD, fmt.Errorf("unknown unit in duration: %q", unit)
+				return zeroD(), fmt.Errorf("unknown unit in duration: %q", unit)
 			}
 		}
 
@@ -337,106 +336,3 @@ func isDuration(s string, when time.Time, u *Units, r *Replace) (time.Duration, 
 
 	return time.Duration(total), nil
 }
-
-// A convienence function to dateparse.ParseIn(date, t.Location())
-//func (t *Tart) Parse(date string) (time.Time, error) {
-//	return dateparse.ParseIn(date, t.Location())
-//}
-
-// A convienence function to dateparse.ParseAny(date)
-//func (t *Tart) ParseAny(date string) (time.Time, error) {
-//	return dateparse.ParseAny(date)
-//}
-
-// Delegates requested fn(TimeOf, Parse, ParseAny) to Unix time to string.
-//func (t *Tart) UnixString(fn, val string) string {
-//	var ut time.Time
-//	var err error
-//	switch fn {
-//	case "TimeOf":
-//		ut = t.TimeOf(val)
-//	case "Parse", "ParseAny":
-//		ut, err = t.Parse(val)
-//	}
-//	if err != nil {
-//		return err.Error()
-//	}
-//	return fmt.Sprintf("%d", ut.Unix())
-//}
-
-/*
-// Tart to now as a readable age string; not 100% exact, but round and
-// apprehendable.
-func (t *Tart) ReadableAgeString() string {
-	nt := time.Now()
-	ra := nt.Sub(t.Time)
-	var val float64
-	var unit string
-	switch {
-	case ra < time.Hour:
-		val = ra.Minutes()
-		switch {
-		case val < 2:
-			unit = "minute"
-		default:
-			unit = "minutes"
-		}
-	case ra < DAY:
-		val = ra.Hours()
-		switch {
-		case val < 2:
-			unit = "hour"
-		default:
-			unit = "hours"
-		}
-	case ra > DAY && ra < (WEEK*2):
-		val = (ra.Hours() / 24)
-		switch {
-		case val < 2:
-			unit = "day"
-		default:
-			unit = "days"
-		}
-	case ra > (WEEK*2) && ra < (ROUNDMONTH*2):
-		val = (ra.Hours() / (24 * 7))
-		switch {
-		case val < 2:
-			unit = "week"
-		default:
-			unit = "weeks"
-		}
-	case ra > (ROUNDMONTH*2) && ra < YEAR:
-		val = (ra.Hours() / ((24 * 7) * 30))
-		switch {
-		case val < 2:
-			unit = "month"
-		default:
-			unit = "months"
-		}
-	case ra > YEAR:
-		val = ra.Hours() / ((24 * 7) * 365)
-		switch {
-		case val < 2:
-			unit = "year"
-		default:
-			unit = "years"
-		}
-	}
-	return fmt.Sprintf("%.0f %s", val, unit)
-}
-*/
-
-/*
-//
-func (t *Tart) Run(x string) interface{} {
-	p, cErr := expr.Compile(x, expr.Env(t))
-	if cErr != nil {
-		return cErr
-	}
-	out, rErr := expr.Run(p, x)
-	if rErr != nil {
-		return rErr
-	}
-	return out
-}
-*/
