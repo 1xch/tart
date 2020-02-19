@@ -30,3 +30,4 @@ _back
 *.out
 *.old.*
 coverage.html
+coverage.out

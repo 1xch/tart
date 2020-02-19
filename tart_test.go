@@ -7,177 +7,294 @@ import (
 )
 
 func TestTart(t *testing.T) {
-	tartInstance := New(HolidaysUS)
+	tt := initialize(t)
+	testSet(t, tt)
+	testGet(t, tt)
+	testDuration(t, tt)
+}
+
+type tTart struct {
+	*Tart
+	timeExact time.Time
+	currYear  int
+}
+
+func initialize(t *testing.T) *tTart {
+	tartInstance, iErr := New(SetTimeFmt(time.RFC3339), HolidaysBase)
+	if iErr != nil {
+		t.Error(iErr.Error())
+	}
 	testTimeExact := time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local)
-	tartInstance.SetTime(testTimeExact)
+	tartInstance.Establish(testTimeExact)
+	if rErr := tartInstance.SetBatch(holidaysBase(tartInstance)); rErr != nil {
+		t.Error(rErr.Error())
+	}
 	currYear := time.Now().Year()
-	//lj4 := func() time.Time {
-	//	var ret time.Time
-	//	j4 := time.Date(currYear, time.July, 4, 0, 0, 0, 0, time.Local)
-	//	n := time.Now()
-	//	switch {
-	//	case n.Before(j4):
-	//		ret = time.Date(currYear-1, time.July, 4, 0, 0, 0, 0, time.Local)
-	//	case n.After(j4):
-	//		ret = j4
-	//	}
-	//	return ret
-	//}
-	//nj4 := func() time.Time {
-	//	var ret time.Time
-	//	j4 := time.Date(currYear, time.July, 4, 0, 0, 0, 0, time.Local)
-	//	n := time.Now()
-	//	switch {
-	//	case n.Before(j4):
-	//		ret = j4
-	//	case n.After(j4):
-	//		ret = time.Date(currYear+1, time.July, 4, 0, 0, 0, 0, time.Local)
-	//	}
-	//	return ret
-	//}
-	// base
-	var testT = []struct {
+	return &tTart{tartInstance, testTimeExact, currYear}
+}
+
+var nilTime time.Time = time.Time{}
+
+func testSet(t *testing.T, tt *tTart) {
+	testSet := []struct {
+		k      string
+		exp    time.Time
+		expErr error
+		sfn    func(*Tart) error
+		gfn    func(*Tart) time.Time
+	}{
+		{
+			"[SET 'start'=='july 2 2019 12:01 PM']",
+			time.Date(2019, time.July, 2, 12, 1, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.SetParsedDate("start", "july 2 2019 12:01 PM") },
+			func(x *Tart) time.Time { return x.Get("start") },
+		},
+		{
+			"[SETDIRECT  'after'=='time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local)']",
+			time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error {
+				return x.SetDirect("after", time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local))
+			},
+			func(x *Tart) time.Time { return x.Get("after") },
+		},
+		{
+			"[SETDIRECT 'before'=='time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local)']",
+			time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error {
+				return x.SetDirect("before", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local))
+			},
+			func(x *Tart) time.Time { return x.Get("before") },
+		},
+		{
+			"[SETRELATION 'end'=='wrapRelative(time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local))']",
+			time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local),
+			nil,
+			func(x *Tart) error {
+				return x.SetRelation("end", wrapRelative(time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)))
+			},
+			func(x *Tart) time.Time { return x.Get("end") },
+		},
+		{
+			"[SETPARSEDDATE 'fireworks'=='July 4 2019 at 9PM']",
+			time.Date(2019, time.July, 4, 21, 0, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.SetParsedDate("fireworks", "July 4, 2019 9:00:00 PM") },
+			func(x *Tart) time.Time { return x.Get("fireworks") },
+		},
+		{
+			"[SETUNIX 'lunch'=='1562256000']",
+			time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.SetFloat("lunch", 1562256000) },
+			func(x *Tart) time.Time { return x.Get("lunch") },
+		},
+		{
+			"[SET 'as0'=='>1d!start']",
+			time.Date(2019, time.July, 3, 12, 1, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.Set("as0", ">1d!start") },
+			func(x *Tart) time.Time { return x.Get("as0") },
+		},
+		{
+			"[SET 'as1'=='>12h3m!before'",
+			time.Date(2019, time.July, 3, 12, 3, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.Set("as1", ">12h3m!before") },
+			func(x *Tart) time.Time { return x.Get("as1") },
+		},
+		{
+			"[SET 'as2'=='-59m!end']",
+			time.Date(2019, time.July, 4, 23, 0, 59, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.Set("as2", "-59m!end") },
+			func(x *Tart) time.Time { return x.Get("as2") },
+		},
+		{
+			"[SET 'as3'=='<13h!after']",
+			time.Date(2019, time.July, 4, 23, 0, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.Set("as3", "<13h!after") },
+			func(x *Tart) time.Time { return x.Get("as3") },
+		},
+		{
+			"[SET 'as4'=='>>1w",
+			time.Date(2019, time.July, 18, 12, 0, 0, 0, time.Local),
+			nil,
+			func(x *Tart) error { return x.Set("as4", ">>1w") },
+			func(x *Tart) time.Time { return x.Get("as4") },
+		},
+		{
+			"[SET 'check SET reservedKeyError']",
+			nilTime,
+			reservedKeyError("any"),
+			func(x *Tart) error { return x.Set("any", "!end") },
+			nil,
+		},
+		{
+			"[SETRELATION 'check SETRELATION reservedKeyError']",
+			nilTime,
+			reservedKeyError("any"),
+			func(x *Tart) error { return x.SetRelation("any", newRelation(func(*Tart) TimeFunc { return nil })) },
+			nil,
+		},
+		{
+			"[SETDIRECT 'check SETDIRECT reservedKeyError']",
+			nilTime,
+			reservedKeyError("any"),
+			func(x *Tart) error { return x.SetDirect("any", nilTime) },
+			nil,
+		},
+		{
+			"[SETPARSEDDATE 'check SETPARSEDDATE reservedKeyError']",
+			nilTime,
+			reservedKeyError("any"),
+			func(x *Tart) error { return x.SetParsedDate("any", "january 1 1927") },
+			nil,
+		},
+		{
+			"[SETFLOAT 'check SETFLOAT reservedKeyError']",
+			nilTime,
+			reservedKeyError("any"),
+			func(x *Tart) error { return x.SetFloat("any", 0) },
+			nil,
+		},
+	}
+	for _, v := range testSet {
+		if v.sfn != nil {
+			err := v.sfn(tt.Tart)
+			switch {
+			case v.expErr != nil:
+				if strings.Compare(v.expErr.Error(), err.Error()) != 0 {
+					t.Errorf("expected error '%s' but got error '%s'", v.expErr, err)
+				}
+			case v.expErr == nil:
+				if err != nil {
+					t.Errorf("%s: resulted in err -- %s", v.k, err.Error())
+				}
+			}
+		}
+	}
+	for _, v := range testSet {
+		if v.gfn != nil && v.exp != nilTime {
+			cmp := v.gfn(tt.Tart)
+			if !cmp.Equal(v.exp) {
+				t.Errorf("%s: expected %v, but got %v", v.k, v.exp, cmp)
+			}
+		}
+	}
+}
+
+func testGet(t *testing.T, tt *tTart) {
+	testGet := []struct {
 		req string
 		exp time.Time
 	}{
+		// dot is now
+		{"!", tt.timeExact},
+		{"", tt.timeExact},
 		// manipulation of...
 		// minute
-
+		{">1m", time.Date(2019, time.July, 4, 12, 1, 0, 0, time.Local)},
+		{"+1m", time.Date(2019, time.July, 4, 12, 1, 0, 0, time.Local)},
+		{"<1m", time.Date(2019, time.July, 4, 11, 59, 0, 0, time.Local)},
+		{"-1m", time.Date(2019, time.July, 4, 11, 59, 0, 0, time.Local)},
+		{">>>>>1m", time.Date(2019, time.July, 4, 12, 5, 0, 0, time.Local)},
+		{"+++++1m", time.Date(2019, time.July, 4, 12, 5, 0, 0, time.Local)},
+		{"<<<<<1m", time.Date(2019, time.July, 4, 11, 55, 0, 0, time.Local)},
+		{"-----1m", time.Date(2019, time.July, 4, 11, 55, 0, 0, time.Local)},
+		{">1m!eod", time.Date(2019, time.July, 5, 0, 0, 59, 0, time.Local)},
+		{"<1m!eod", time.Date(2019, time.July, 4, 23, 58, 59, 0, time.Local)},
+		{"+1m+1m", time.Date(2019, time.July, 4, 12, 2, 0, 0, time.Local)},
+		{"-1m-1m", time.Date(2019, time.July, 4, 11, 58, 0, 0, time.Local)},
+		{"+1m-1m", time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local)},
+		{"-1m+1m", time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local)},
+		{">1m<1m", time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local)},
+		{">1m<1m+1m-1m", time.Date(2019, time.July, 4, 12, 0, 0, 0, time.Local)},
 		// hour
-		//{"shift!-1h", time.Date(2019, time.July, 4, 11, 0, 0, 0, time.Local)},
-		//{"shift!+1h", time.Date(2019, time.July, 4, 13, 0, 0, 0, time.Local)},
-		//{"shiftFrom!eod,-1min", time.Date(2019, time.July, 4, 23, 58, 59, 0, time.Local)},
-		//{"shiftFrom!eod,-1h", time.Date(2019, time.July, 4, 22, 59, 59, 0, time.Local)},
-		//{"shiftFrom!soy,+1h", time.Date(2020, time.January, 1, 1, 0, 0, 0, time.Local)},
+		{"<1h", time.Date(2019, time.July, 4, 11, 0, 0, 0, time.Local)},
+		{">1h", time.Date(2019, time.July, 4, 13, 0, 0, 0, time.Local)},
+		{"<1h!eod", time.Date(2019, time.July, 4, 22, 59, 59, 0, time.Local)},
+		{">1h!soy", time.Date(2020, time.January, 1, 1, 0, 0, 0, time.Local)},
 		// day
-		{"July 4th 2019 at 11:00PM", time.Date(2019, time.July, 4, 23, 0, 0, 0, time.Local)},
-		{"july 4th 2099", time.Date(2099, time.July, 4, 0, 0, 0, 0, time.Local)},
-		{"july 4", time.Date(currYear, time.July, 4, 0, 0, 0, 0, time.Local)},
-		//{"4th of july", time.Date(2019, time.July, 4, 0, 0, 0, 0, time.Local)},
-		{"yesterday", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local)},
-		{"tomorrow", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
-		{"sod", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
-		{"eod", time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)},
-		{"tuesday", time.Date(2019, time.July, 9, 0, 0, 0, 0, time.Local)},
-		//{"shift!-1d", time.Date(2019, time.July, 3, 12, 0, 0, 0, time.Local)},
-		//{"shift!+1d", time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local)},
-		//{"shiftFrom!tuesday,+1d", time.Date(2019, time.July, 10, 0, 0, 0, 0, time.Local)},
-		//{"next!tuesday,0w", time.Date(2019, time.July, 9, 0, 0, 0, 0, time.Local)},
-		//{"last!tuesday,1w", time.Date(2019, time.July, 2, 0, 0, 0, 0, time.Local)},
-		//{"next!tuesday,1w", time.Date(2019, time.July, 16, 0, 0, 0, 0, time.Local)},
-		//{"next!friday,0w", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
-		//{"last!friday,1w", time.Date(2019, time.June, 28, 0, 0, 0, 0, time.Local)},
-		//{"next!friday,1w", time.Date(2019, time.July, 12, 0, 0, 0, 0, time.Local)},
+		{"!today", time.Date(2019, time.July, 4, 0, 0, 0, 0, time.Local)},
+		{"!July 4th 2019 at 11:00PM", time.Date(2019, time.July, 4, 23, 0, 0, 0, time.Local)},
+		{"!july 4th 2099", time.Date(2099, time.July, 4, 0, 0, 0, 0, time.Local)},
+		{"!july 4", time.Date(tt.currYear, time.July, 4, 0, 0, 0, 0, time.Local)},
+		{"!yesterday", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local)},
+		{"+1d!yesterday", time.Date(2019, time.July, 4, 0, 0, 0, 0, time.Local)},
+		{"++1d!yesterday", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
+		{"!tomorrow", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
+		{"!sod", time.Date(2019, time.July, 5, 0, 0, 0, 0, time.Local)},
+		{"!eod", time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)},
+		{"!tuesday", time.Date(2019, time.July, 9, 0, 0, 0, 0, time.Local)},
+		{"<1d", time.Date(2019, time.July, 3, 12, 0, 0, 0, time.Local)},
+		{"+1d", time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local)},
+		{"+1d!tuesday", time.Date(2019, time.July, 10, 0, 0, 0, 0, time.Local)},
+		{"!tuesday", time.Date(2019, time.July, 9, 0, 0, 0, 0, time.Local)},
+		{"-1w!tuesday", time.Date(2019, time.July, 2, 0, 0, 0, 0, time.Local)},
+		{">1w!tuesday", time.Date(2019, time.July, 16, 0, 0, 0, 0, time.Local)},
+		{"!christmas", time.Date(2019, time.December, 25, 12, 0, 0, 0, time.Local)},
 		// week
-		{"sow", time.Date(2019, time.July, 7, 0, 0, 0, 0, time.Local)},
+		{"!sow", time.Date(2019, time.July, 7, 0, 0, 0, 0, time.Local)},
 		{"sunday", time.Date(2019, time.July, 7, 0, 0, 0, 0, time.Local)},
-		{"socw", time.Date(2019, time.June, 30, 0, 0, 0, 0, time.Local)},
+		{"!socw", time.Date(2019, time.June, 30, 0, 0, 0, 0, time.Local)},
 		{"eow", time.Date(2019, time.July, 6, 0, 0, 0, 0, time.Local)},
-		{"eocw", time.Date(2019, time.July, 6, 0, 0, 0, 0, time.Local)},
+		{"!eocw", time.Date(2019, time.July, 6, 0, 0, 0, 0, time.Local)},
 		{"soww", time.Date(2019, time.July, 8, 0, 0, 0, 0, time.Local)},
-		{"eoww", time.Date(2019, time.July, 5, 23, 59, 59, 0, time.Local)},
-		//shift
-		//shiftFrom
-		//{"next!week,1w",time.Date()},
-		//{"last!week,1w",time.Date()},
+		{"!eoww", time.Date(2019, time.July, 5, 23, 59, 59, 0, time.Local)},
 		// month
-		{"socm", time.Date(2019, time.July, 1, 0, 0, 0, 0, time.Local)},
-		{"som", time.Date(2019, time.August, 1, 0, 0, 0, 0, time.Local)},
+		{"!socm", time.Date(2019, time.July, 1, 0, 0, 0, 0, time.Local)},
+		{"!som", time.Date(2019, time.August, 1, 0, 0, 0, 0, time.Local)},
 		{"eom", time.Date(2019, time.July, 31, 23, 59, 59, 0, time.Local)},
-		{"eocm", time.Date(2019, time.July, 31, 23, 59, 59, 0, time.Local)},
-		{"december", time.Date(2019, time.December, 1, 0, 0, 0, 0, time.Local)},
+		{"!eocm", time.Date(2019, time.July, 31, 23, 59, 59, 0, time.Local)},
+		{"!december", time.Date(2019, time.December, 1, 0, 0, 0, 0, time.Local)},
 		{"june", time.Date(2020, time.June, 1, 0, 0, 0, 0, time.Local)},
-		//{"shift!-1m", time.Date(2019, time.June, 4, 12, 0, 0, 0, time.Local)},
-		//{"shift!+1m", time.Date(2019, time.August, 4, 12, 0, 0, 0, time.Local)},
-		// shiftFrom
-		// {"next!january,1m", time.Date(2020, time.January, 1, 0, 0, 0, 0, time.Local)},
-		// {"last!january,1m", time.Date(2019, time.January, 1, 0, 0, 0, 0, time.Local)},
+		{">5months!", time.Date(2019, time.December, 4, 12, 0, 0, 0, time.Local)},
 		// multimonth
-		{"soq", time.Date(2019, time.October, 1, 0, 0, 0, 0, time.Local)},
-		{"eoq", time.Date(2019, time.September, 30, 23, 59, 59, 59, time.Local)},
+		{"!soq", time.Date(2019, time.October, 1, 0, 0, 0, 0, time.Local)},
+		{">2h!soq", time.Date(2019, time.October, 1, 2, 0, 0, 0, time.Local)},
+		{"!eoq", time.Date(2019, time.September, 30, 23, 59, 59, 59, time.Local)},
+		{"<2h!eoq", time.Date(2019, time.September, 30, 21, 59, 59, 59, time.Local)},
 		// year
-		{"soy", time.Date(2020, time.January, 1, 0, 0, 0, 0, time.Local)},
-		{"eoy", time.Date(2019, time.December, 31, 0, 0, 0, 0, time.Local)},
-		//{"shiftFrom!soy,-1y", time.Date(2019, time.January, 1, 0, 0, 0, 0, time.Local)},
-		//{"next!july 4,0y", nj4()},
-		//{"last!july 4,0y", lj4()},
-		// {"last!july 4,1y", time.Date(currYear-1, time.July, 4, 0, 0, 0, 0, time.Local)},
-		// {"next!july 4,1y", time.Date(currYear+1, time.July, 4, 0, 0, 0, 0, time.Local)},
-		// {"last!christmas,1y", time.Date(2018, time.December, 25, 0, 0, 0, 0, time.Local)},
-		// {"next!christmas,1y", time.Date(2019, time.December, 25, 0, 0, 0, 0, time.Local)},
+		{"!soy", time.Date(2020, time.January, 1, 0, 0, 0, 0, time.Local)},
+		{"!eoy", time.Date(2019, time.December, 31, 0, 0, 0, 0, time.Local)},
+		{"<1year!", time.Date(2018, time.July, 4, 12, 0, 0, 0, time.Local)},
+		// multiple duration value shifts
+		{">1m2s", time.Date(2019, time.July, 4, 12, 1, 2, 0, time.Local)},
+		{">>>>>1m2s", time.Date(2019, time.July, 4, 12, 5, 10, 0, time.Local)},
 		// misc
-		{"someday", time.Date(2077, time.April, 27, 14, 37, 0, 0, time.Local)},
-		//{"next!july 4,weekly", time.Date(currYear, time.July, 11, 0, 0, 0, 0, time.Local)},
-
+		{"!someday", time.Date(2077, time.April, 27, 14, 37, 0, 0, time.Local)},
+		// purposeful test reduplications
+		{">1m", time.Date(2019, time.July, 4, 12, 1, 0, 0, time.Local)},
+		{">2h!soq", time.Date(2019, time.October, 1, 2, 0, 0, 0, time.Local)},
+		{"!eocm", time.Date(2019, time.July, 31, 23, 59, 59, 0, time.Local)},
 	}
-	for _, v := range testT {
-		cmp := tartInstance.TimeOf(v.req)
+	ti := tt.Tart
+	for _, v := range testGet {
+		cmp := ti.Get(v.req)
 		if !cmp.Equal(v.exp) {
 			t.Errorf("%s expected %v, but got %v", strings.ToUpper(v.req), v.exp, cmp)
 		}
 	}
+}
 
-	// Association
-	tartInstance.SetDirect("after", time.Date(2019, time.July, 5, 12, 0, 0, 0, time.Local))
-	tartInstance.SetDirect("before", time.Date(2019, time.July, 3, 0, 0, 0, 0, time.Local))
-	tartInstance.SetRelative("end", wrapRelativeFunc(time.Date(2019, time.July, 4, 23, 59, 59, 0, time.Local)))
-	tartInstance.SetParsed("start", "july 2 2019 12:01 PM")
-	var testAS = []struct {
-		k, v string
-		exp  time.Time
+func testDuration(t *testing.T, tt *tTart) {
+	testDuration := []struct {
+		id string
+		pd string
 	}{
-		{"as0", "start+1d", time.Date(2019, time.July, 3, 12, 1, 0, 0, time.Local)},
-		{"as1", "before+12h3m", time.Date(2019, time.July, 3, 12, 3, 0, 0, time.Local)},
-		{"as2", "end-59m", time.Date(2019, time.July, 4, 23, 0, 59, 0, time.Local)},
-		{"as3", "after-13h", time.Date(2019, time.July, 4, 23, 0, 0, 0, time.Local)},
-		{"as4", "now+1w", time.Date(2019, time.July, 11, 12, 0, 0, 0, time.Local)},
+		{">7d>7d>7d+1h", "505h"},
+		{"<7d<7d<7d-1h", "505h"},
+		{">1h", "1h"},
+		{"<1h", "1h"},
+		//{">1month", "744h"}, // is current month so requires more thought
 	}
-	for _, v := range testAS {
-		cmp, err := tartInstance.Associate(v.k, v.v)
-		if err != nil {
-			t.Errorf("associate: %s,%s got error -- %s", v.k, v.v, err.Error())
-		}
-		if !cmp.Equal(v.exp) {
-			t.Errorf("associate: %s,%s expected %v, but got %v", v.k, v.v, v.exp, cmp)
-		}
-	}
-	for _, v := range testAS {
-		cmp := tartInstance.TimeOf(v.k)
-		if !cmp.Equal(v.exp) {
-			t.Errorf("TimeOf associated: %s expected %v, but got %v", strings.ToUpper(v.v), v.exp, cmp)
-		}
-	}
-
-	// Duration
-	testD := []struct {
-		id       string
-		pd       string
-		when     time.Time
-		instance bool
-	}{
-		{"7d+7d+7d+1h", "505h", time.Now(), true},
-		{"hourly", "1h", time.Now(), true},
-		{"weekly", "168h", time.Now(), true},
-		{"1m", "744h", time.Date(2019, 1, 1, 0, 0, 0, 0, time.Local), false},
-		{"1m", "672h", time.Date(2019, 2, 1, 0, 0, 0, 0, time.Local), false},
-		{"monthly", "744h", time.Date(2019, 1, 1, 0, 0, 0, 0, time.Local), false},
-		{"monthly", "672h", time.Date(2019, 2, 1, 0, 0, 0, 0, time.Local), false},
-		//{"","",time.Date(2019, 2, 1, 0, 0, 0, 0, time.Local),true}
-	}
-	du := defaultUnits()
-	dr := defaultReplace()
-	for _, v := range testD {
-		var id time.Duration
-		var iErr error
-		switch {
-		case v.instance:
-			id = tartInstance.DurationOf(v.id)
-		case !v.instance:
-			id, iErr = isDuration(v.id, v.when, du, dr)
-		}
-		if iErr != nil {
-			t.Error(iErr.Error())
-		}
+	ti := tt.Tart
+	for _, v := range testDuration {
+		id := ti.Duration(v.id)
 		pd, pErr := time.ParseDuration(v.pd)
 		if pErr != nil {
 			t.Error(pErr.Error())

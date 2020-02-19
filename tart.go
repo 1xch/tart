@@ -1,13 +1,7 @@
 package tart
 
 import (
-	"bytes"
-	"fmt"
-	"math"
-	"strconv"
-	"strings"
 	"time"
-	"unicode"
 )
 
 // Tart is a a struct encapsulating functionality related to a specific,
@@ -15,32 +9,32 @@ import (
 // time)".
 type Tart struct {
 	time.Time
-	*Supplement
-	*Relation
-	last string
-	dir  *directive
+	*relations
+	*directives
 	tFmt string
 }
 
 // New builds a new Tart instance from the provided Config.
-func New(cnf ...Config) *Tart {
+func New(cnf ...Config) (*Tart, error) {
 	t := &Tart{}
 	config := mkConfig(cnf...)
 	for _, fn := range config {
-		fn(t)
+		if err := fn(t); err != nil {
+			return nil, err
+		}
 	}
-	return t
+	return t, nil
 }
 
 // Config is a function taking a *Tart instance.
-type Config func(*Tart)
+type Config func(*Tart) error
 
 func mkConfig(cnf ...Config) []Config {
 	def := []Config{
-		func(t *Tart) { t.Time = time.Now() },
-		func(t *Tart) { t.Supplement = defaultSupplement() },
-		func(t *Tart) { t.Relation = newRelation(t) },
-		func(t *Tart) { t.tFmt = time.RFC3339 },
+		func(t *Tart) error { t.Time = time.Now(); return nil },
+		func(t *Tart) error { t.relations = newRelations(t); return nil },
+		func(t *Tart) error { t.directives = newDirectives(); return nil },
+		func(t *Tart) error { t.tFmt = time.RFC3339; return nil },
 	}
 	def = append(def, cnf...)
 	return def
@@ -48,292 +42,140 @@ func mkConfig(cnf ...Config) []Config {
 
 // SetTimeFmt ...
 func SetTimeFmt(n string) Config {
-	return func(t *Tart) {
+	return func(t *Tart) error {
 		t.tFmt = n
+		return nil
 	}
 }
 
-// SetTime sets the time of the instance to the provided time. This forces a reset to
+// Establish sets the time of the instance to the provided time. This forces a reset to
 // align the instance to the new time setting all relative funcs to defaults,
 // removing cached time funcs, and erasing any set associations.
-func (t *Tart) SetTime(tt time.Time) {
+func (t *Tart) Establish(tt time.Time) {
 	t.Time = tt
 	t.reset()
 }
 
 func (t *Tart) reset() {
-	t.Relation.reset(t)
+	t.relations.reset(t)
+	t.directives.reset()
 }
 
-// TimeOf returns the time of the provided string, relative to the Tart instance time.
-func (t *Tart) TimeOf(at string) time.Time {
-	fn := t.popTimeFn(at)
+// Set ...
+func (t *Tart) Set(k, v string) error {
+	if !isReservedKey(t.relations.rk, k) {
+		d := parse(v)
+		t.setDirective(v, d)
+		nt := pop(t)
+		err := t.SetRelation(k, wrapRelative(nt))
+		return err
+	}
+	return reservedKeyError(k)
+}
+
+// Get attempts to return the time of the provided directive from the Tart instance.
+//
+// A directive is a string of the form `modifiers ! point in time` where:
+//
+// Modifiers are one or more signs followed by duration information:
+//	'>' = shift forward
+//  '<' = shift backward
+//  '+' = iter next
+//  '-' = iter last
+//
+//  'iter' and 'shift' are functionally equivalent currently, use depending on
+//   your preference and need
+//
+// Modifiers stack. Modifiers are collected by type. Duration is applied left wise to
+// freestanding modifiers taking duration information.
+//	e.g.
+//		">>>>>>1h"        = shift forward 6 hours
+//      "<1d<2d<<<<3d"    = shift backward 15 days
+//      "+++++1h"         = iter forward 5 hours
+//      "------1h"        = iter back 6 hours
+//      "--3h>3h"         = iter back 6 hours, shifted ahead 3 hours
+//
+// Point in time is an exclamation point optionally followed by a string. Point may be a
+// defined keyword relation or a date construction of some form. When not
+// followed by a string, '!' means the tart instance fixed time. When not
+// modified, the dot may be omitted, i.e absence of a concrete dot is indicative
+// of a statement of point with no modification. A null string is equivalent to
+// single point("" == "!")
+//
+//	e.g.'
+//	   "!july 4 1776"     = time of july 4, 1776
+//     "!tuesday"         = next tuesday
+//     "!eoq"             = end of quarter
+//     "!later"           = later
+//
+// Construction of a directive is dependent on the output you desire. Common use
+// is shifting time forward or backward, iteration from a specific point, and
+// retrieving a specific point in time from a general specification. Order of
+// application is to establish a point in time, iterate, then
+// shift.
+//
+// Examples:
+//      `>>>1h.`                       = 3 hours forward from the tart instance time
+//      `<<<1h.`                       = 3 hours backward from the tart instance time
+//		`>>1h!tuesday`                 = 2 hours forward from next tuesday relative to the tart instance time
+//      `<<1h!tuesday`                 = 2 hours backward from next tuesday relative to the tart instance time
+//      `->>1h!tuesday`                = 2 hours forward from last tuesday relative to the tart instance time
+//      `++<<1h!tuesday`               = 2nd tuesday from now shifted back 2 hours
+//      `>>>>>1y!`                     = 5 years from now (where now is tart instance time)
+//      `+++++!`                       = 5 years from now (where now is tart instance time)
+//      `>>>>>1y!tuesday`              = 5 years from next tuesday
+//      `<<<<<1y!oct 31 2025`          = now, if today is oct 31 2020
+//		`>.tuesday`, `!tuesday`        = next tuesday, relative to the tart instance time
+//      `<!tuesday`                    = last tuesday, relative to the tart instance time
+//      `>>>1w!tuesday`, `>>>!tuesday` = 3rd tuesday from tart instance time
+//      `<<<!july 4 2006`              = july 4th 2003
+//      `+!july 4`, `!july 4`          = the next july 4th
+//      `+!christmas`, `!christmas`    = the next christmas (where christmas is defined on the tart instance)
+//      `!october 31 1927`             = october 31 1927
+//      `!october 31`                  = the next instance of october 31
+//      `tomorrow`,`!tomorrow`         = time tomorrow, relative to today
+//
+// Unique directives are stored by key and reused.
+func (t *Tart) Get(in string) time.Time {
+	var d *directive
+	d = t.getDirective(in)
+	if d != nil {
+		return pop(t)
+	}
+	d = parse(in)
+	t.setDirective(in, d)
+	return pop(t)
+}
+
+func pop(t *Tart) time.Time {
+	fn := t.popTimeFn()
 	return fn()
 }
 
-// Associate ...
-func (t *Tart) Associate(k, v string) (time.Time, error) {
-	if err := association(k, v, t.rr, t); err != nil {
-		return time.Time{}, err
+// Duration returns the duration of the modifier of a parsed directive in
+// relation to the tart time instance.
+// e.g. ">7d>7d>7d+1h!" ==
+//      ">7d>7d>7d+1h" ==
+//      ">7d>7d>7d+1h!<any relation>" ==
+//      "505h" ==
+//      (time.Duration) 505h0m0s
+func (t *Tart) Duration(in string) time.Duration {
+	var d *directive
+	d = t.getDirective(in)
+	if d != nil {
+		return pumpDur(t.Time, d)
 	}
-	return t.TimeOf(k), nil
+	d = parse(in)
+	t.setDirective(in, d)
+	return pumpDur(t.Time, d)
 }
 
-func association(key, value string, r map[string]RelativeFunc, b *Tart) error {
-	if epoch, err := strconv.ParseFloat(value, 64); err == nil && epoch >= 0 {
-		trunc := math.Trunc(epoch)
-		nanos := fractionToNanos(epoch - trunc)
-		r[key] = wrapRelativeFunc(time.Unix(int64(trunc), nanos))
-		return nil
+func pumpDur(t time.Time, d *directive) time.Duration {
+	var nt time.Time = t
+	nt = pumpShift(nt, d)
+	nts := nt.Sub(t)
+	if nts < 0 {
+		nts = -nts
 	}
-	var base RelativeFunc
-	var y, m, d int
-	var duration time.Duration
-	var direction = 1
-	var err error
-
-	for k, v := range r {
-		if strings.HasPrefix(value, k) {
-			base = v
-			if len(value) > len(k) {
-				// maybe has +, -
-				switch dir := value[len(k)]; dir {
-				case '+':
-					// no-op
-				case '-':
-					direction = -1
-				default:
-					return fmt.Errorf("expected '+' or '-': %q", dir)
-				}
-				var nv string
-				y, m, d, nv = ymd(value[len(k)+1:])
-				if len(nv) > 0 {
-					duration, err = time.ParseDuration(nv)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			if direction < 0 {
-				y = -y
-				m = -m
-				d = -d
-			}
-			tfn := base(b)
-			bt := tfn()
-			nt := bt.Add(time.Duration(int(duration)*direction)).AddDate(y, m, d)
-			r[key] = wrapRelativeFunc(nt)
-			return nil
-		}
-	}
-	nt, fErr := time.Parse(b.tFmt, value)
-	if fErr == nil {
-		r[key] = wrapRelativeFunc(nt)
-	}
-	return fErr
-}
-
-func fractionToNanos(fraction float64) int64 {
-	return int64(fraction * float64(time.Second/time.Nanosecond))
-}
-
-func ymd(value string) (int, int, int, string) {
-	// alternating numbers and strings
-	var y, m, d int
-	var accum int     // accumulates digits
-	var unit []byte   // accumulates units
-	var unproc []byte // accumulate unprocessed durations to return
-
-	unitComplete := func() {
-		// NOTE: compare byte slices because some units, i.e. ms, are multi-rune
-		if bytes.Equal(unit, []byte{'d'}) || bytes.Equal(unit, []byte{'d', 'a', 'y'}) || bytes.Equal(unit, []byte{'d', 'a', 'y', 's'}) {
-			d += accum
-		} else if bytes.Equal(unit, []byte{'w'}) || bytes.Equal(unit, []byte{'w', 'e', 'e', 'k'}) || bytes.Equal(unit, []byte{'w', 'e', 'e', 'k', 's'}) {
-			d += 7 * accum
-		} else if bytes.Equal(unit, []byte{'m', 'o'}) || bytes.Equal(unit, []byte{'m', 'o', 'n'}) || bytes.Equal(unit, []byte{'m', 'o', 'n', 't', 'h'}) || bytes.Equal(unit, []byte{'m', 'o', 'n', 't', 'h', 's'}) || bytes.Equal(unit, []byte{'m', 't', 'h'}) || bytes.Equal(unit, []byte{'m', 'n'}) {
-			m += accum
-		} else if bytes.Equal(unit, []byte{'y'}) || bytes.Equal(unit, []byte{'y', 'e', 'a', 'r'}) || bytes.Equal(unit, []byte{'y', 'e', 'a', 'r', 's'}) {
-			y += accum
-		} else {
-			unproc = append(append(unproc, strconv.Itoa(accum)...), unit...)
-		}
-	}
-
-	expectDigit := true
-	for _, rune := range value {
-		if unicode.IsDigit(rune) {
-			if expectDigit {
-				accum = accum*10 + int(rune-'0')
-			} else {
-				unitComplete()
-				unit = unit[:0]
-				accum = int(rune - '0')
-			}
-			continue
-		}
-		unit = append(unit, string(rune)...)
-		expectDigit = false
-	}
-	if len(unit) > 0 {
-		unitComplete()
-		accum = 0
-		unit = unit[:0]
-	}
-	// log.Printf("y: %d; m: %d; d: %d; nv: %q", y, m, d, unproc)
-	return y, m, d, string(unproc)
-}
-
-// DurationOf returns time.Duration of the provided string.
-// Accepts certain shorthand variations on a duration such as "yearly" or "monthly",
-// that convert to durations which of necessity are fuzzy dependent on when they are
-// calculated. This can be frustrating, but allows you degrees of freedom to tailor
-// calculations to your exact or inexact needs. Use the precision in phrasing you
-// require to achieve your goals.
-//
-// Like `time.ParseDuration`, this accepts multiple fractional scalars, so "now+1.5days-3.21hours"
-// is evaluated properly.
-//
-// The following tokens may be used to specify the respective unit of time:
-//
-// * Nanosecond: ns
-// * Microsecond: us, µs (U+00B5 = micro symbol), μs (U+03BC = Greek letter mu)
-// * Millisecond: ms
-// * Second: s, sec, second, seconds
-// * Minute: min, minute, minutes
-// * Hour: h, hr, hour, hours
-// * Day: d, day, days
-// * Week: w, wk, week, weeks
-// * Month: m, mo, mon, month, months
-// * Year: y, yr, year, years
-func (t *Tart) DurationOf(dur string) time.Duration {
-	t.last = dur
-	if dur, err := isDuration(dur, t.Time, t.units, t.replace); err == nil {
-		return dur
-	}
-	return zeroD()
-}
-
-func zeroD() time.Duration {
-	return time.Duration(0)
-}
-
-// TODO: reduce cyclomatic complexity
-func isDuration(s string, when time.Time, u *units, r *replace) (time.Duration, error) {
-	if len(s) == 0 {
-		return zeroD(), nil
-	}
-
-	// catch some common but not easily parsed durations
-	s = r.ReplaceWith(s)
-
-	var isNegative bool
-	var exp, whole, fraction int64
-	var number, totalYears, totalMonths, totalDays, totalDuration float64
-	var dmy, atd time.Duration
-
-	for s != "" {
-		// consume possible sign
-		if s[0] == '+' {
-			if len(s) == 1 {
-				return zeroD(), fmt.Errorf("cannot parse sign without digits: '+'")
-			}
-			isNegative = false
-			s = s[1:]
-		} else if s[0] == '-' {
-			if len(s) == 1 {
-				return zeroD(), fmt.Errorf("cannot parse sign without digits: '-'")
-			}
-			isNegative = true
-			s = s[1:]
-		}
-		// consume digits
-		var done bool
-		for !done {
-			c := s[0]
-			switch {
-			case c >= '0' && c <= '9':
-				d := int64(c - '0')
-				if exp > 0 {
-					exp++
-					fraction = 10*fraction + d
-				} else {
-					whole = 10*whole + d
-				}
-				s = s[1:]
-			case c == '.':
-				if exp > 0 {
-					return zeroD(), fmt.Errorf("invalid floating point number format: two decimal points found")
-				}
-				exp = 1
-				fraction = 0
-				s = s[1:]
-			default:
-				done = true
-			}
-		}
-		// adjust number
-		number = float64(whole)
-		if exp > 0 {
-			number += float64(fraction) * math.Pow(10, float64(1-exp))
-		}
-		if isNegative {
-			number *= -1
-		}
-		// find end of unit
-		var i int
-		for ; i < len(s) && s[i] != '+' && s[i] != '-' && (s[i] < '0' || s[i] > '9'); i++ {
-			// identifier bytes: no-op
-		}
-		unit := s[:i]
-
-		//fmt.Printf("number: %f; unit: %q\n", number, unit)
-
-		if duration, ok := u.GetUnit(unit); ok {
-			totalDuration += number * duration
-		} else {
-			switch unit {
-			case "m", "mo", "mon", "month", "months":
-				totalMonths += number
-			case "y", "yr", "year", "years":
-				totalYears += number
-			default:
-				return zeroD(), fmt.Errorf("unknown unit in duration: %q", unit)
-			}
-		}
-
-		s = s[i:]
-		whole = 0
-	}
-	if totalYears != 0 {
-		whole := math.Trunc(totalYears)
-		fraction := totalYears - whole
-		totalYears = whole
-		totalMonths += 12 * fraction
-	}
-	if totalMonths != 0 {
-		whole := math.Trunc(totalMonths)
-		fraction := totalMonths - whole
-		totalMonths = whole
-		totalDays += 30 * fraction
-	}
-	if totalDays != 0 {
-		whole := math.Trunc(totalDays)
-		fraction := totalDays - whole
-		totalDays = whole
-		totalDuration += (fraction * 24.0 * float64(time.Hour))
-	}
-
-	var dmyNs, tdNs int64
-	if totalYears != 0 || totalMonths != 0 || totalDays != 0 {
-		f := when.AddDate(int(totalYears), int(totalMonths), int(totalDays))
-		dmy = f.Sub(when)
-		dmyNs = dmy.Nanoseconds()
-	}
-	if totalDuration != 0 {
-		atd = time.Duration(totalDuration)
-		tdNs = atd.Nanoseconds()
-	}
-	total := dmyNs + tdNs
-
-	return time.Duration(total), nil
+	return nts
 }
