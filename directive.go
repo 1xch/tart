@@ -88,7 +88,7 @@ func (s *shiftFrag) append(b byte) {
 }
 
 func durString(s *shiftFrag) string {
-	ds := string(s.sD) //
+	ds := string(s.sD)
 	if ds == "" {
 		ds = "0s"
 	}

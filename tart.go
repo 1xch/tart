@@ -135,7 +135,7 @@ func (t *Tart) Set(k, v string) error {
 //      `!october 31`                  = the next instance of october 31
 //      `tomorrow`,`!tomorrow`         = time tomorrow, relative to today
 //
-// Unique directives are stored by key and reused.
+// Unique directives are stored by key and reused within the scope of use.
 func (t *Tart) Get(in string) time.Time {
 	var d *directive
 	d = t.getDirective(in)
